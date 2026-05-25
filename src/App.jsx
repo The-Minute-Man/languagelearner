@@ -1,6 +1,13 @@
 import { useState, useReducer, useEffect, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
+// Auto-initialize Supabase from Vite env vars (VITE_ prefix exposes them to the browser build)
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabaseAutoClient = (SUPABASE_URL && SUPABASE_ANON_KEY)
+  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  : null;
+
 // ==========================================
 // PRESET STORIES FOR STORY MODE (No Emojis)
 // ==========================================
@@ -488,11 +495,9 @@ export default function App() {
   
   // API Keys / Configurations (In-Memory Only)
   const [apiKey, setApiKey] = useState("");
-  const [supabaseUrl, setSupabaseUrl] = useState("");
-  const [supabaseAnonKey, setSupabaseAnonKey] = useState("");
-  const [supabaseClient, setSupabaseClient] = useState(null);
+  // Supabase — auto-connected from .env, no manual entry needed
+  const [supabaseClient, setSupabaseClient] = useState(supabaseAutoClient);
   const [dbConnected, setDbConnected] = useState(false);
-  const [dbConnecting, setDbConnecting] = useState(false);
   const [dbError, setDbError] = useState("");
   
   // Decks state (Starts empty as requested)
@@ -506,34 +511,28 @@ export default function App() {
   const [cloudDecks, setCloudDecks] = useState([]);
   const [cloudLoading, setCloudLoading] = useState(false);
 
-  // Initialize Supabase Client
-  const handleConnectSupabase = async () => {
-    if (!supabaseUrl.trim() || !supabaseAnonKey.trim()) {
-      setDbError("Please enter both Supabase URL and Anon Key.");
+  // Auto-verify Supabase connection on mount
+  useEffect(() => {
+    if (!supabaseAutoClient) {
+      setDbError("No Supabase env vars found. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to your .env file.");
       return;
     }
-    setDbConnecting(true);
-    setDbError("");
-    try {
-      const client = createClient(supabaseUrl.trim(), supabaseAnonKey.trim());
-      setSupabaseClient(client);
-      
-      // Perform simple check select to verify table
-      const { data, error } = await client.from('decks').select('id, name').limit(1);
-      
-      if (error && error.code !== 'PGRST116') {
-        // Table doesn't exist yet but endpoint connected successfully
-        console.warn("Connected, but tables are missing in Supabase.", error);
+    const checkConnection = async () => {
+      try {
+        const { error } = await supabaseAutoClient.from('decks').select('id').limit(1);
+        if (error && error.code !== 'PGRST116' && error.code !== '42P01') {
+          // PGRST116 = no rows; 42P01 = table doesn't exist yet — both mean connection is alive
+          console.warn("Supabase check:", error);
+        }
+        setDbConnected(true);
+        setSupabaseClient(supabaseAutoClient);
+      } catch (err) {
+        console.error("Supabase connection failed:", err);
+        setDbError("Could not reach Supabase. Check your project status.");
       }
-      setDbConnected(true);
-    } catch (err) {
-      console.error(err);
-      setDbError("Failed to connect to Supabase. Check credentials.");
-      setDbConnected(false);
-    } finally {
-      setDbConnecting(false);
-    }
-  };
+    };
+    checkConnection();
+  }, []);
 
   // Fetch available decks from Supabase Cloud
   const fetchCloudDecks = async () => {
@@ -2093,7 +2092,7 @@ CREATE TABLE IF NOT EXISTS translation_history (
           <div className="settings-tab-container" style={{ maxWidth: '640px', margin: '0 auto' }}>
             <div className="card">
               <h2 className="card-title">Settings</h2>
-              <p className="card-subtitle">Configure API integrations and Supabase database connection profiles in-memory.</p>
+              <p className="card-subtitle">Configure your preferences and AI integration for Story Mode.</p>
               
               {/* Part 1: Gemini Config */}
               <div style={{ marginBottom: '2rem', borderBottom: '1px solid var(--border-gray)', paddingBottom: '1.5rem' }}>
@@ -2114,82 +2113,7 @@ CREATE TABLE IF NOT EXISTS translation_history (
                 </div>
               </div>
 
-              {/* Part 2: Supabase Config */}
-              <div>
-                <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--dark-navy)', marginBottom: '0.5rem' }}>Supabase Database Sync</h3>
-                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-                  Save or load custom study decks to the cloud, and persist your Story translation grading records.
-                </p>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '1.5rem' }}>
-                  <div className="settings-group" style={{ marginBottom: 0 }}>
-                    <span className="settings-label">Supabase URL</span>
-                    <input 
-                      type="text"
-                      className="settings-input"
-                      placeholder="https://yourproject.supabase.co"
-                      value={supabaseUrl}
-                      onChange={(e) => setSupabaseUrl(e.target.value)}
-                    />
-                  </div>
-
-                  <div className="settings-group" style={{ marginBottom: 0 }}>
-                    <span className="settings-label">Supabase Anon Public Key</span>
-                    <input 
-                      type="password"
-                      className="settings-input"
-                      placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-                      value={supabaseAnonKey}
-                      onChange={(e) => setSupabaseAnonKey(e.target.value)}
-                    />
-                  </div>
-
-                  {dbError && (
-                    <span style={{ fontSize: '0.75rem', color: 'var(--error-red)', fontWeight: 600 }}>
-                      {dbError}
-                    </span>
-                  )}
-
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
-                    <div className={`db-status-badge ${dbConnected ? 'connected' : 'disconnected'}`}>
-                      <span className="status-dot"></span>
-                      <span>{dbConnected ? 'Database Connected' : 'Database Disconnected'}</span>
-                    </div>
-
-                    <button 
-                      className="btn btn-primary"
-                      disabled={dbConnecting || !supabaseUrl.trim() || !supabaseAnonKey.trim()}
-                      onClick={handleConnectSupabase}
-                    >
-                      {dbConnecting ? 'Connecting...' : dbConnected ? 'Re-Connect' : 'Connect Supabase'}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Database Scaffolder Guidelines */}
-                <div style={{ borderTop: '1px dashed var(--border-gray)', paddingTop: '1.25rem', marginTop: '1.25rem' }}>
-                  <h4 style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--dark-navy)', marginBottom: '0.375rem' }}>Scaffold Cloud Database Tables</h4>
-                  <p style={{ fontSize: '0.725rem', color: 'var(--text-muted)', lineHeight: 1.4, marginBottom: '0.75rem' }}>
-                    To enable database deck saving and translation history logs, copy the DDL script below and execute it inside the <strong>SQL Editor</strong> tab on your Supabase web dashboard.
-                  </p>
-
-                  <div className="code-block-container">
-                    <span className="code-text">{SQL_SCRIPTS}</span>
-                  </div>
-
-                  <button 
-                    className="btn btn-secondary w-full"
-                    style={{ marginTop: '0.75rem', gap: '0.375rem', padding: '0.5rem' }}
-                    onClick={() => {
-                      navigator.clipboard.writeText(SQL_SCRIPTS);
-                      alert("Database SQL DDL Script copied to clipboard! Execute it inside your Supabase SQL editor.");
-                    }}
-                  >
-                    <CopyIcon className="icon-svg-sm" /> Copy SQL Schema Script
-                  </button>
-                </div>
-
-              </div>
+              {/* End of Settings */}
 
             </div>
           </div>
