@@ -8,41 +8,7 @@ const supabaseAutoClient = (SUPABASE_URL && SUPABASE_ANON_KEY)
   ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
   : null;
 
-// ==========================================
-// PRESET STORIES FOR STORY MODE (No Emojis)
-// ==========================================
-const PRESET_STORIES = [
-  {
-    id: "story_market",
-    title: "Una tarde en el mercado",
-    description: "Follow along on a vibrant trip to a local fruit market.",
-    sentences: [
-      { text: "Hoy es un día muy soleado y hermoso.", translation: "Today is a very sunny and beautiful day." },
-      { text: "Voy al mercado central para comprar frutas frescas.", translation: "I am going to the central market to buy fresh fruits." },
-      { text: "El mercado está lleno de colores y olores agradables.", translation: "The market is full of colors and pleasant smells." },
-      { text: "El vendedor me saluda con una gran sonrisa.", translation: "The vendor greets me with a big smile." },
-      { text: "Le pido un kilo de manzanas rojas y plátanos.", translation: "I ask him for a kilo of red apples and bananas." },
-      { text: "¿Cuánto cuesta todo esto, señor?", translation: "How much does all this cost, sir?" },
-      { text: "Pago con dinero en efectivo y le doy las gracias.", translation: "I pay with cash and thank him." },
-      { text: "Regreso a casa muy feliz con mi compra.", translation: "I return home very happy with my purchase." }
-    ]
-  },
-  {
-    id: "story_puppy",
-    title: "El perrito extraviado",
-    description: "An encouraging tale of rescuing a lost puppy in a neighborhood.",
-    sentences: [
-      { text: "Ayer encontré un pequeño perro en el parque.", translation: "Yesterday I found a small dog in the park." },
-      { text: "Estaba temblando de frío bajo un gran árbol.", translation: "He was shaking from the cold under a large tree." },
-      { text: "No tenía collar ni placa de identificación.", translation: "He did not have a collar or identification tag." },
-      { text: "Decidí llevarlo a mi casa para cuidarlo.", translation: "I decided to take him to my house to care for him." },
-      { text: "Le di un plato de comida caliente y agua.", translation: "I gave him a plate of hot food and water." },
-      { text: "Pronto se quedó dormido cerca de la chimenea.", translation: "Soon he fell asleep near the fireplace." },
-      { text: "Hoy puse carteles en el vecindario para buscar a su dueño.", translation: "Today I put up posters in the neighborhood to look for his owner." },
-      { text: "Espero que podamos encontrar a su familia muy pronto.", translation: "I hope we can find his family very soon." }
-    ]
-  }
-];
+
 
 // ==========================================
 // VECTOR SVG ICONS (Completely replaces Emojis)
@@ -510,13 +476,47 @@ export default function App() {
   // Loaded cloud decks from Supabase
   const [cloudDecks, setCloudDecks] = useState([]);
   const [cloudLoading, setCloudLoading] = useState(false);
+  const [cloudStories, setCloudStories] = useState([]);
+  const [storiesLoading, setStoriesLoading] = useState(false);
 
-  // Auto-verify Supabase connection on mount
+  // Auth & Admin State
+  const [session, setSession] = useState(null);
+  const [authView, setAuthView] = useState('login');
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  
+  const isAdmin = session?.user?.email === 'samuel.joseph@live.com';
+
+  // Auto-verify Supabase connection and handle Auth Session
   useEffect(() => {
     if (!supabaseAutoClient) {
       setDbError("No Supabase env vars found. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to your .env file.");
       return;
     }
+
+    let mounted = true;
+    const initializeAuth = async () => {
+      try {
+        const { data, error } = await supabaseAutoClient.auth.getSession();
+        if (error) {
+          console.warn("Supabase auth session error:", error);
+        }
+        if (mounted) {
+          setSession(data?.session ?? null);
+        }
+      } catch (err) {
+        console.error("Failed to load auth session:", err);
+      }
+    };
+
+    initializeAuth();
+
+    const { data: { subscription } } = supabaseAutoClient.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+
     const checkConnection = async () => {
       try {
         const { error } = await supabaseAutoClient.from('decks').select('id').limit(1);
@@ -532,7 +532,58 @@ export default function App() {
       }
     };
     checkConnection();
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
+
+  const handleAuthSubmit = async (e) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthError("");
+
+    if (!supabaseAutoClient) {
+      setAuthError("Unable to authenticate: Supabase client is not initialized.");
+      setAuthLoading(false);
+      return;
+    }
+
+    try {
+      if (authView === 'login') {
+        const { data, error } = await supabaseAutoClient.auth.signInWithPassword({
+          email: authEmail.trim(),
+          password: authPassword,
+        });
+        if (error) throw error;
+        if (data?.session) {
+          setSession(data.session);
+        }
+      } else {
+        const { data, error } = await supabaseAutoClient.auth.signUp({
+          email: authEmail.trim(),
+          password: authPassword,
+        });
+        if (error) throw error;
+        if (data?.session) {
+          setSession(data.session);
+        } else {
+          setAuthError("Sign up successful. Check your email to confirm your account before signing in.");
+        }
+      }
+    } catch (error) {
+      setAuthError(error?.message ?? "Authentication failed. Please try again.");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    if (!supabaseAutoClient) return;
+    await supabaseAutoClient.auth.signOut();
+    setSession(null);
+  };
 
   // Fetch available decks from Supabase Cloud
   const fetchCloudDecks = async () => {
@@ -569,14 +620,31 @@ export default function App() {
     }
   };
 
-  // Trigger deck fetch when DB state changes to connected
+  // Fetch available stories from Supabase Cloud
+  const fetchCloudStories = async () => {
+    if (!supabaseClient) return;
+    setStoriesLoading(true);
+    try {
+      const { data, error } = await supabaseClient.from('stories').select('*');
+      if (error) throw error;
+      setCloudStories(data || []);
+    } catch (err) {
+      console.error("Fetch Cloud Stories Error:", err);
+    } finally {
+      setStoriesLoading(false);
+    }
+  };
+
+  // Trigger deck and story fetch when DB state changes to connected and user is logged in
   useEffect(() => {
-    if (dbConnected) {
+    if (dbConnected && session) {
       fetchCloudDecks();
+      fetchCloudStories();
     } else {
       setCloudDecks([]);
+      setCloudStories([]);
     }
-  }, [dbConnected]);
+  }, [dbConnected, session]);
 
   // Save current active deck to Supabase
   const handleSaveDeckToCloud = async () => {
@@ -589,7 +657,11 @@ export default function App() {
     try {
       const { data: deckData, error: deckError } = await supabaseClient
         .from('decks')
-        .insert({ name: deckNameInput, description: "Synchronized from client uploader" })
+        .insert({ 
+          name: deckNameInput, 
+          description: "Synchronized from client uploader",
+          user_id: session.user.id
+        })
         .select()
         .single();
 
@@ -609,6 +681,45 @@ export default function App() {
     } catch (err) {
       console.error(err);
       alert("Error saving deck: " + err.message);
+    }
+  };
+
+  // Save current active deck to Supabase (GLOBAL for Admin)
+  const handleSaveGlobalDeck = async () => {
+    const activeDeck = getActiveDeck();
+    if (!supabaseClient || activeDeck.length === 0) return;
+    
+    const deckNameInput = prompt("ADMIN: Enter a name for this GLOBAL cloud deck:", "Global Vocabulary");
+    if (!deckNameInput) return;
+
+    try {
+      const { data: deckData, error: deckError } = await supabaseClient
+        .from('decks')
+        .insert({ 
+          name: deckNameInput, 
+          description: "Global Official Deck",
+          user_id: session.user.id,
+          is_global: true
+        })
+        .select()
+        .single();
+
+      if (deckError) throw deckError;
+
+      const cardsToInsert = activeDeck.map(c => ({
+        deck_id: deckData.id,
+        term: c.term,
+        definition: c.definition
+      }));
+
+      const { error: cardsError } = await supabaseClient.from('cards').insert(cardsToInsert);
+      if (cardsError) throw cardsError;
+
+      alert("Success! Global Deck saved to Supabase Cloud.");
+      fetchCloudDecks();
+    } catch (err) {
+      console.error(err);
+      alert("Error saving global deck: " + err.message);
     }
   };
 
@@ -911,13 +1022,50 @@ export default function App() {
   };
 
   const startPresetStory = (idx) => {
-    setActiveStory(PRESET_STORIES[idx]);
-    setStoryStarted(true);
+    setActiveStory(cloudStories[idx]);
+    setCurrentSentenceIndex(0);
     setCurrentSentenceIndex(0);
     setStoryFeed([]);
     setStoryTranslationInput("");
     setShowStoryEnd(false);
     setApiWarningTranslate(false);
+  };
+
+  const handlePublishGlobalStory = async () => {
+    if (!supabaseClient) return;
+    const title = prompt("ADMIN: Enter a title for the global story:");
+    if (!title) return;
+    const description = prompt("ADMIN: Enter a description for the global story:");
+    if (!description) return;
+    
+    // Parse the current custom text into sentences
+    const sentences = customStoryText
+      .split(/[.!?]+/)
+      .map(s => s.trim())
+      .filter(s => s.length > 3)
+      .map(s => ({ text: s + ".", translation: "(Pending Translation)" }));
+      
+    if (sentences.length === 0) {
+      alert("No valid sentences found to publish.");
+      return;
+    }
+
+    try {
+      const { error } = await supabaseClient.from('stories').insert({
+        title,
+        description,
+        sentences_jsonb: sentences,
+        user_id: session.user.id,
+        is_global: true
+      });
+      if (error) throw error;
+      alert("Success! Global Story published.");
+      setCustomStoryText("");
+      fetchCloudStories();
+    } catch (err) {
+      console.error(err);
+      alert("Error publishing global story: " + err.message);
+    }
   };
 
   const handleStorySentenceSubmit = async () => {
@@ -1076,6 +1224,78 @@ CREATE TABLE IF NOT EXISTS translation_history (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );`;
 
+  // Render Auth View if not logged in
+  if (!session) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'var(--bg-color)' }}>
+        <div className="card" style={{ maxWidth: '400px', width: '100%', padding: '2rem' }}>
+          <div className="text-center" style={{ marginBottom: '1.5rem' }}>
+            <div style={{ display: 'inline-flex', width: '3.5rem', height: '3.5rem', backgroundColor: 'var(--primary-blue)', color: 'white', borderRadius: 'var(--radius-md)', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem' }}>
+              <span style={{ fontSize: '1.75rem', fontWeight: 800 }}>LL</span>
+            </div>
+            <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--dark-navy)' }}>
+              {authView === 'login' ? 'Welcome Back' : 'Create Account'}
+            </h2>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+              {authView === 'login' ? 'Sign in to access your custom decks and study history.' : 'Sign up to sync your progress across devices.'}
+            </p>
+          </div>
+
+          <form onSubmit={handleAuthSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: 'var(--dark-navy)', marginBottom: '0.375rem', textTransform: 'uppercase' }}>Email</label>
+              <input 
+                type="email" 
+                className="settings-input" 
+                placeholder="you@example.com"
+                value={authEmail}
+                onChange={e => setAuthEmail(e.target.value)}
+                required
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: 'var(--dark-navy)', marginBottom: '0.375rem', textTransform: 'uppercase' }}>Password</label>
+              <input 
+                type="password" 
+                className="settings-input" 
+                placeholder="••••••••"
+                value={authPassword}
+                onChange={e => setAuthPassword(e.target.value)}
+                required
+              />
+            </div>
+
+            {authError && (
+              <div style={{ fontSize: '0.75rem', color: 'var(--error-red)', backgroundColor: 'var(--error-light)', padding: '0.5rem', borderRadius: '4px' }}>
+                {authError}
+              </div>
+            )}
+            {dbError && (
+              <div style={{ fontSize: '0.75rem', color: 'var(--error-red)', backgroundColor: 'var(--error-light)', padding: '0.5rem', borderRadius: '4px' }}>
+                {dbError}
+              </div>
+            )}
+
+            <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '0.75rem' }} disabled={authLoading}>
+              {authLoading ? 'Loading...' : (authView === 'login' ? 'Sign In' : 'Sign Up')}
+            </button>
+          </form>
+
+          <div style={{ textAlign: 'center', marginTop: '1.5rem', fontSize: '0.8rem', color: 'var(--text-light)' }}>
+            {authView === 'login' ? "Don't have an account? " : "Already have an account? "}
+            <button 
+              type="button"
+              style={{ background: 'none', border: 'none', color: 'var(--primary-blue)', fontWeight: 600, cursor: 'pointer', padding: 0 }}
+              onClick={() => { setAuthView(authView === 'login' ? 'signup' : 'login'); setAuthError(''); }}
+            >
+              {authView === 'login' ? 'Sign Up' : 'Sign In'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app-layout">
       {/* ==========================================
@@ -1114,6 +1334,21 @@ CREATE TABLE IF NOT EXISTS translation_history (
               Settings
             </button>
           </div>
+
+          {session && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <span style={{ fontSize: '0.85rem', color: 'var(--text-light)' }}>
+                {session.user.email}
+              </span>
+              <button
+                className="btn btn-secondary"
+                style={{ padding: '0.45rem 0.75rem', fontSize: '0.8rem' }}
+                onClick={handleSignOut}
+              >
+                Sign Out
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
@@ -1143,6 +1378,15 @@ CREATE TABLE IF NOT EXISTS translation_history (
                   onClick={handleSaveDeckToCloud}
                 >
                   Save Active Deck
+                </button>
+              )}
+              {activeDeck.length > 0 && isAdmin && (
+                <button 
+                  className="btn btn-primary" 
+                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', backgroundColor: '#eab308', borderColor: '#ca8a04', color: 'black' }}
+                  onClick={handleSaveGlobalDeck}
+                >
+                  Publish Global Deck (Admin)
                 </button>
               )}
             </div>
@@ -1768,7 +2012,7 @@ CREATE TABLE IF NOT EXISTS translation_history (
                 {storyActiveTab === 'preset' && (
                   <div>
                     <div className="story-list">
-                      {PRESET_STORIES.map((story, i) => (
+                      {cloudStories.map((story, i) => (
                         <div 
                           key={story.id}
                           className={`story-select-card ${selectedStoryIndex === i ? 'active' : ''}`}
@@ -1812,6 +2056,17 @@ CREATE TABLE IF NOT EXISTS translation_history (
                     >
                       Process & Start Custom Story
                     </button>
+
+                    {isAdmin && (
+                      <button 
+                        className="btn btn-primary w-full"
+                        style={{ marginTop: '0.75rem', backgroundColor: '#eab308', borderColor: '#ca8a04', color: 'black' }}
+                        disabled={!customStoryText.trim()}
+                        onClick={handlePublishGlobalStory}
+                      >
+                        Publish Global Story (Admin)
+                      </button>
+                    )}
                   </div>
                 )}
 
