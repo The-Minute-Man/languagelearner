@@ -1,10 +1,17 @@
 # Supabase setup — classes & permissions
 
-Run the migration once in your Supabase project:
+## Quick fix (use this if you see “Default class is not set up yet”)
 
 1. Open [Supabase Dashboard](https://supabase.com/dashboard) → your project → **SQL Editor**
-2. Paste the contents of `migrations/001_classes_and_profiles.sql`
+2. Paste the full contents of **`setup_now.sql`** (in this folder)
 3. Click **Run**
+4. Refresh the Language Learner app
+
+`setup_now.sql` works with an existing `classes` table (adds `slug`, removes duplicate Spanish 200 rows, creates `user_profiles`, and RLS).
+
+## Full migration (new projects)
+
+Paste `migrations/001_classes_and_profiles.sql` instead if you are starting from scratch.
 
 This creates:
 

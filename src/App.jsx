@@ -10,6 +10,7 @@ const supabaseAutoClient = (SUPABASE_URL && SUPABASE_ANON_KEY)
 
 const ADMIN_EMAIL = 'samuel.joseph@live.com';
 const DEFAULT_CLASS_SLUG = 'spanish-200';
+const DEFAULT_CLASS_NAME = 'Spanish 200';
 
 
 
@@ -601,12 +602,33 @@ export default function App() {
 
   const getDefaultClassId = async () => {
     if (!supabaseClient) return null;
-    const { data } = await supabaseClient
+
+    const { data: bySlug, error: slugError } = await supabaseClient
       .from('classes')
       .select('id')
       .eq('slug', DEFAULT_CLASS_SLUG)
       .maybeSingle();
-    return data?.id ?? null;
+
+    if (!slugError && bySlug?.id) return bySlug.id;
+
+    // Legacy DBs: classes table has name but no slug column yet
+    const { data: byName, error: nameError } = await supabaseClient
+      .from('classes')
+      .select('id')
+      .eq('name', DEFAULT_CLASS_NAME)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    if (!nameError && byName?.id) return byName.id;
+
+    const { data: anyClass } = await supabaseClient
+      .from('classes')
+      .select('id')
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    return anyClass?.id ?? null;
   };
 
   const resolvePublishClassId = async () => {
@@ -619,8 +641,20 @@ export default function App() {
     const { data, error } = await supabaseClient
       .from('classes')
       .select('*')
-      .order('name');
-    if (!error) setAvailableClasses(data || []);
+      .order('created_at', { ascending: true });
+    if (error) {
+      console.error('Fetch classes error:', error);
+      return;
+    }
+    // Dedupe legacy rows (multiple "Spanish 200" before slug migration)
+    const seen = new Set();
+    const unique = (data || []).filter((c) => {
+      const key = c.slug || c.name;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    setAvailableClasses(unique);
   };
 
   const fetchUserProfile = async () => {
@@ -632,6 +666,9 @@ export default function App() {
       .maybeSingle();
     if (error) {
       console.error('Fetch profile error:', error);
+      if (error.code === 'PGRST205') {
+        setDbError('Database setup incomplete: run supabase/setup_now.sql in the Supabase SQL Editor.');
+      }
       return null;
     }
     setUserProfile(data);
@@ -661,6 +698,9 @@ export default function App() {
       return created;
     } catch (err) {
       console.error('Ensure profile error:', err);
+      if (err?.code === 'PGRST205') {
+        setDbError('Run supabase/setup_now.sql in Supabase Dashboard → SQL Editor, then refresh this page.');
+      }
       return null;
     } finally {
       setProfileLoading(false);
@@ -719,7 +759,7 @@ export default function App() {
   const rejoinDefaultClass = async () => {
     const defaultId = await getDefaultClassId();
     if (!defaultId) {
-      alert('Default class is not set up yet. Run the Supabase migration in supabase/migrations/.');
+      alert('No Spanish 200 class found. Open Supabase → SQL Editor, run the file supabase/setup_now.sql, then refresh.');
       return;
     }
     await joinClass(defaultId);
