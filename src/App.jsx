@@ -387,6 +387,9 @@ const initialLearnState = {
   selectedOption: null,
   isAnswerSubmitted: false,
   isCorrect: null,
+  // Progress points tracking
+  sessionPoints: 0,
+  cardAttemptMap: {}, // Track attempts per card ID: {cardId: attempts}
   // Matching sub-game state
   matchingSelectedCard: null,
   matchingMatchedIds: [],
@@ -461,9 +464,18 @@ function learnReducer(state, action) {
       
       const totalAttempts = state.totalAttempts + 1;
       let firstTimeCorrect = state.firstTimeCorrect;
+      let sessionPoints = state.sessionPoints;
       
       if (isCorrect && current.attempts === 0) {
         firstTimeCorrect += 1;
+        // First correct attempt: +1 point
+        sessionPoints += 1;
+      } else if (isCorrect && current.attempts === 1) {
+        // Second correct attempt: +1 point
+        sessionPoints += 1;
+      } else if (!isCorrect) {
+        // Wrong answer: -1 point
+        sessionPoints = Math.max(0, sessionPoints - 1);
       }
 
       return {
@@ -471,7 +483,8 @@ function learnReducer(state, action) {
         isAnswerSubmitted: true,
         isCorrect,
         totalAttempts,
-        firstTimeCorrect
+        firstTimeCorrect,
+        sessionPoints
       };
     }
 
@@ -546,8 +559,12 @@ function learnReducer(state, action) {
     case 'RESET_LEARN_SESSION':
       return {
         ...initialLearnState,
-        questionTypes: state.questionTypes
+        questionTypes: state.questionTypes,
+        sessionPoints: 0
       };
+
+    case 'UPDATE_SESSION_POINTS':
+      return { ...state, sessionPoints: action.payload };
 
     default:
       return state;
@@ -1313,6 +1330,33 @@ export default function App() {
     activeDeck.length,
   ]);
 
+  // Auto-save learn mode session progress
+  useEffect(() => {
+    if (!session || learnState.settingsScreen || !learnState.currentQuestion) return;
+
+    const timer = setTimeout(() => {
+      saveLearnSessionProgress();
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [session?.user?.id, learnState.sessionPoints]);
+
+  // Auto-save story mode session progress
+  useEffect(() => {
+    if (!session || !storyStarted || !activeStory) return;
+
+    if (storyProgressSaveTimerRef.current) {
+      clearTimeout(storyProgressSaveTimerRef.current);
+    }
+    storyProgressSaveTimerRef.current = setTimeout(() => {
+      saveStorySessionProgress();
+    }, 1000);
+
+    return () => {
+      if (storyProgressSaveTimerRef.current) clearTimeout(storyProgressSaveTimerRef.current);
+    };
+  }, [session?.user?.id, storySessionPoints, storyStarted, activeStory?.title]);
+
   const fileInputRef = useRef(null);
 
   const applyCsvText = (text, sourceLabel = 'Pasted data') => {
@@ -1586,10 +1630,12 @@ export default function App() {
   const [currentSentenceIndex, setCurrentSentenceIndex] = useState(0);
   const [storyTranslationInput, setStoryTranslationInput] = useState("");
   const [storyFeed, setStoryFeed] = useState([]);
+  const [storySessionPoints, setStorySessionPoints] = useState(0);
   
   const [gradingLoading, setGradingLoading] = useState(false);
   const [apiWarningTranslate, setApiWarningTranslate] = useState(false);
   const [showStoryEnd, setShowStoryEnd] = useState(false);
+  const storyProgressSaveTimerRef = useRef(null);
 
   const feedContainerRef = useRef(null);
 
@@ -1628,16 +1674,17 @@ export default function App() {
     setStoryTranslationInput("");
     setShowStoryEnd(false);
     setApiWarningTranslate(false);
+    setStorySessionPoints(0);
   };
 
   const startPresetStory = (idx) => {
     setActiveStory(cloudStories[idx]);
     setCurrentSentenceIndex(0);
-    setCurrentSentenceIndex(0);
     setStoryFeed([]);
     setStoryTranslationInput("");
     setShowStoryEnd(false);
     setApiWarningTranslate(false);
+    setStorySessionPoints(0);
   };
 
   const handlePublishGlobalStory = async () => {
@@ -1795,6 +1842,10 @@ export default function App() {
         aiGrade: parsedGrade
       };
 
+      // Add points: score >= 4 = +1 point, score < 4 = -1 point
+      const points = parsedGrade.score >= 4 ? 1 : -1;
+      setStorySessionPoints(prev => Math.max(0, prev + points));
+
       setStoryFeed(prev => [...prev, feedItem]);
       setStoryTranslationInput("");
 
@@ -1829,6 +1880,8 @@ export default function App() {
   };
 
   const resetStoryMode = () => {
+    // Save story session progress before resetting
+    saveStorySessionProgress();
     setStoryStarted(false);
     setActiveStory(null);
     setCurrentSentenceIndex(0);
@@ -1836,6 +1889,60 @@ export default function App() {
     setStoryTranslationInput("");
     setShowStoryEnd(false);
     setApiWarningTranslate(false);
+    setStorySessionPoints(0);
+  };
+
+  const getLearnProgressKey = () => {
+    if (!activeClassId) return null;
+    return `learn_${activeClassId}`;
+  };
+
+  const readLearnProgress = () => {
+    const root = readStudyProgressRoot();
+    const key = getLearnProgressKey();
+    if (!key || !root[key]) return { points: 0, sessions: 0 };
+    return root[key];
+  };
+
+  const saveLearnSessionProgress = async () => {
+    if (!session || !learnState.currentQuestion || learnState.settingsScreen) return;
+    const key = getLearnProgressKey();
+    if (!key) return;
+
+    const root = readStudyProgressRoot();
+    if (!root[key]) {
+      root[key] = { points: 0, sessions: 0 };
+    }
+    root[key].points = learnState.sessionPoints;
+    root[key].updatedAt = new Date().toISOString();
+    await persistStudyProgressRoot(root);
+  };
+
+  const getStoryProgressKey = () => {
+    if (!activeClassId) return null;
+    return `story_${activeClassId}`;
+  };
+
+  const readStoryProgress = () => {
+    const root = readStudyProgressRoot();
+    const key = getStoryProgressKey();
+    if (!key || !root[key]) return { points: 0, sessions: 0 };
+    return root[key];
+  };
+
+  const saveStorySessionProgress = async () => {
+    if (!session || !activeStory) return;
+    const key = getStoryProgressKey();
+    if (!key) return;
+
+    const root = readStudyProgressRoot();
+    if (!root[key]) {
+      root[key] = { points: 0, sessions: 0 };
+    }
+    root[key].points = storySessionPoints;
+    root[key].sessions = (root[key].sessions || 0) + 1;
+    root[key].updatedAt = new Date().toISOString();
+    await persistStudyProgressRoot(root);
   };
 
   const getAverageStoryScore = () => {
@@ -2381,8 +2488,8 @@ export default function App() {
                 </p>
               </div>
             ) : learnState.settingsScreen ? (
-              
-              /* 1. Learn settings selector */
+              <>
+              {/* 1. Learn settings selector */}
               <div className="card" style={{ maxWidth: '600px', margin: '0 auto' }}>
                 <h2 className="card-title">Setup Learn Session</h2>
                 <p className="card-subtitle">Toggle the following check cards to customize the session question mix.</p>
@@ -2456,12 +2563,10 @@ export default function App() {
                   </button>
                 </div>
               </div>
-            ) : learnState.currentQuestion ? (
-              
-              /* 2. Active Learn interactive panel */
+              {/* 2. Active Learn interactive panel */}
               <div className="card" style={{ maxWidth: '580px', margin: '0 auto', minHeight: '380px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                 <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                     <span className="custom-badge">
                       Progress: {learnState.totalQuestionsCount - learnState.questionQueue.length} / {learnState.totalQuestionsCount}
                     </span>
@@ -2476,6 +2581,27 @@ export default function App() {
                         className="progress-bar-fill"
                         style={{ width: `${((learnState.totalQuestionsCount - learnState.questionQueue.length) / learnState.totalQuestionsCount) * 100}%` }}
                       ></div>
+                    </div>
+                  </div>
+
+                  {/* Points Progress Bar */}
+                  <div style={{ marginTop: '1rem', padding: '0.75rem', backgroundColor: 'var(--primary-light)', borderRadius: 'var(--radius-md)', border: '1px solid var(--primary-blue)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                      <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--primary-blue)', textTransform: 'uppercase' }}>Session Points</span>
+                      <span style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--primary-blue)' }}>{learnState.sessionPoints}</span>
+                    </div>
+                    <div style={{ width: '100%', height: '8px', backgroundColor: 'rgba(59, 130, 246, 0.2)', borderRadius: '4px', overflow: 'hidden' }}>
+                      <div 
+                        style={{ 
+                          height: '100%', 
+                          backgroundColor: 'var(--primary-blue)', 
+                          width: `${Math.min(learnState.sessionPoints * 5, 100)}%`,
+                          transition: 'width 0.3s ease'
+                        }}
+                      ></div>
+                    </div>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.375rem', fontStyle: 'italic' }}>
+                      +1 for first correct • +1 for second correct • -1 for wrong
                     </div>
                   </div>
                 </div>
@@ -2662,9 +2788,7 @@ export default function App() {
                 </div>
 
               </div>
-            ) : (
-              
-              /* 3. Learn session scoreboard results */
+              {/* 3. Learn session scoreboard results */}
               <div className="card end-screen" style={{ maxWidth: '540px', margin: '0 auto' }}>
                 <div style={{ display: 'inline-flex', width: '3rem', height: '3rem', backgroundColor: 'var(--success-light)', color: 'var(--success-green)', borderRadius: '50%', alignItems: 'center', justifyContent: 'center', marginBottom: '1.25rem' }}>
                   <CheckIcon className="icon-svg" />
@@ -2689,6 +2813,10 @@ export default function App() {
                     </div>
                     <div className="stat-label">Time Taken</div>
                   </div>
+                  <div className="stat-card">
+                    <div className="stat-value">{learnState.sessionPoints}</div>
+                    <div className="stat-label">Session Points</div>
+                  </div>
                 </div>
 
                 <div className="button-group mt-4" style={{ borderTop: '1px solid var(--border-gray)', paddingTop: '1.25rem' }}>
@@ -2709,7 +2837,7 @@ export default function App() {
                   </button>
                 </div>
               </div>
-            )}
+              </>
           </div>
         )}
 
@@ -2719,8 +2847,7 @@ export default function App() {
         {activeTab === 'story' && (
           <div className="story-tab-container">
             {!storyStarted ? (
-              
-              /* 1. Setup / Loading Story Selector */
+              {/* 1. Setup / Loading Story Selector */}
               <div className="card" style={{ maxWidth: '750px', margin: '0 auto' }}>
                 <h2 className="card-title">Story Mode</h2>
                 <p className="card-subtitle">Translate curated or pasted Spanish texts. Graded sentence-by-sentence using Gemini API, with automatic fallback to Google Translate.</p>
@@ -2826,9 +2953,14 @@ export default function App() {
                   >
                     Exit Story
                   </button>
-                  <span className="custom-badge">
-                    Sentence {currentSentenceIndex + 1} of {activeStory.sentences.length}
-                  </span>
+                  <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--primary-blue)', backgroundColor: 'var(--primary-light)', padding: '0.375rem 0.75rem', borderRadius: '4px' }}>
+                      Points: <strong>{storySessionPoints}</strong>
+                    </span>
+                    <span className="custom-badge">
+                      Sentence {currentSentenceIndex + 1} of {activeStory.sentences.length}
+                    </span>
+                  </div>
                 </div>
 
                 {apiWarningTranslate && (
@@ -2957,31 +3089,23 @@ export default function App() {
                     {storyFeed.length > 0 && !gradingLoading && (
                       <div className="ai-feedback-card">
                         <div className="ai-feedback-header">
-                          <span className="feedback-section-title">Teacher Feedback (Sentence {storyFeed[storyFeed.length - 1].index + 1})</span>
-                          <div className="star-rating-container">
-                            {[1, 2, 3, 4, 5].map((starVal) => (
-                              <StarIcon 
-                                key={starVal} 
-                                className={`star-vector ${starVal <= storyFeed[storyFeed.length - 1].aiGrade.score ? 'filled' : ''}`} 
-                              />
-                            ))}
+                          <span className="feedback-section-title">Sentence {storyFeed[storyFeed.length - 1].index + 1}</span>
+                          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>
+                            Points: +{storyFeed[storyFeed.length - 1].aiGrade.score >= 4 ? 1 : -1}
+                          </span>
+                        </div>
+
+                        <div style={{ borderTop: '1px solid var(--border-gray)', paddingTop: '0.75rem', marginTop: '0.75rem' }}>
+                          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-light)', textTransform: 'uppercase', marginBottom: '0.375rem' }}>Google Translate (Reference):</div>
+                          <div className="feedback-text-content" style={{ color: 'var(--text-main)', fontSize: '0.9rem' }}>
+                            "{storyFeed[storyFeed.length - 1].aiGrade.suggested_translation}"
                           </div>
                         </div>
 
-                        <div>
-                          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--success-text)', textTransform: 'uppercase' }}>What was right:</div>
-                          <div className="feedback-text-content">{storyFeed[storyFeed.length - 1].aiGrade.what_was_right}</div>
-                        </div>
-
-                        <div>
-                          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--error-text)', textTransform: 'uppercase' }}>What was off:</div>
-                          <div className="feedback-text-content">{storyFeed[storyFeed.length - 1].aiGrade.what_was_off}</div>
-                        </div>
-
-                        <div style={{ backgroundColor: 'var(--primary-light)', padding: '0.625rem 0.875rem', borderRadius: 'var(--radius-sm)', borderLeft: '3px solid var(--primary-blue)' }}>
-                          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#1E40AF', textTransform: 'uppercase' }}>Suggested Translation:</div>
-                          <div className="feedback-text-content" style={{ fontStyle: 'italic', color: '#1E40AF', marginTop: '0.125rem' }}>
-                            "{storyFeed[storyFeed.length - 1].aiGrade.suggested_translation}"
+                        <div style={{ marginTop: '0.75rem' }}>
+                          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-light)', textTransform: 'uppercase', marginBottom: '0.375rem' }}>Your Translation:</div>
+                          <div className="feedback-text-content" style={{ color: 'var(--dark-navy)', fontSize: '0.9rem' }}>
+                            "{storyFeed[storyFeed.length - 1].userTrans}"
                           </div>
                         </div>
                       </div>
@@ -3003,65 +3127,46 @@ export default function App() {
                   <p className="card-subtitle">Review your translated sentence scores and detailed review feedback.</p>
                   
                   <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', backgroundColor: '#F8FAFC', borderRadius: 'var(--radius-md)', padding: '1rem 2rem', border: '1px solid var(--border-gray)', margin: '1.25rem 0' }}>
-                    <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-light)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Average Score</span>
+                    <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-light)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Session Points</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', marginTop: '0.125rem' }}>
-                      <span style={{ fontSize: '2.25rem', fontWeight: 800, color: 'var(--dark-navy)', letterSpacing: '-0.02em' }}>{getAverageStoryScore()}</span>
-                      <span style={{ display: 'inline-block', color: 'var(--warning-yellow)', fontSize: '1.25rem' }}>★</span>
+                      <span style={{ fontSize: '2.25rem', fontWeight: 800, color: 'var(--primary-blue)', letterSpacing: '-0.02em' }}>{storySessionPoints}</span>
                     </div>
                   </div>
                 </div>
 
                 <div style={{ borderTop: '1px solid var(--border-gray)', paddingTop: '1.25rem' }}>
-                  <h3 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--dark-navy)', textTransform: 'uppercase', marginBottom: '1rem', letterSpacing: '0.02em' }}>Full Review</h3>
+                  <h3 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--dark-navy)', textTransform: 'uppercase', marginBottom: '1rem', letterSpacing: '0.02em' }}>Translation Review</h3>
                   
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
                     {storyFeed.map((item, idx) => {
-                      const score = item.aiGrade.score;
-                      let scoreTextClass = "custom-badge-red";
-                      if (score >= 4) scoreTextClass = "custom-badge-green";
-                      else if (score === 3) scoreTextClass = "custom-badge-yellow";
-
                       return (
                         <div 
                           key={idx}
                           style={{ border: '1px solid var(--border-gray)', borderRadius: 'var(--radius-md)', padding: '1rem', backgroundColor: 'var(--white)' }}
                         >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.625rem', borderBottom: '1px solid #F1F5F9', paddingBottom: '0.5rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.625rem', paddingBottom: '0.5rem' }}>
                             <span style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--dark-navy)' }}>Sentence {idx + 1}</span>
-                            <div className="d-flex gap-2 align-center">
-                              <span className={`custom-badge ${scoreTextClass}`}>Score: {score}/5</span>
-                              <div className="star-rating-container">
-                                {[1, 2, 3, 4, 5].map((starVal) => (
-                                  <StarIcon 
-                                    key={starVal} 
-                                    className={`star-vector ${starVal <= score ? 'filled' : ''}`} 
-                                  />
-                                ))}
-                              </div>
-                            </div>
+                            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>
+                              Points: {item.aiGrade.score >= 4 ? '+1' : '-1'}
+                            </span>
                           </div>
 
-                          <div className="review-row" style={{ gridTemplateColumns: '1fr 1fr', padding: 0 }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
                             <div>
-                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-light)' }}>SPANISH TEXT:</div>
-                              <div style={{ fontSize: '0.85rem', fontStyle: 'italic', color: 'var(--dark-navy)', marginTop: '0.125rem' }}>"{item.spanish}"</div>
-                              
-                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-light)', marginTop: '0.625rem' }}>YOUR TRANSLATION:</div>
-                              <div style={{ fontSize: '0.85rem', color: 'var(--text-main)', marginTop: '0.125rem' }}>"{item.userTrans}"</div>
+                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-light)', textTransform: 'uppercase', marginBottom: '0.375rem' }}>Spanish:</div>
+                              <div style={{ fontSize: '0.85rem', fontStyle: 'italic', color: 'var(--dark-navy)' }}>"{item.spanish}"</div>
                             </div>
-                            
-                            <div style={{ borderLeft: '1px solid var(--border-gray)', paddingLeft: '1.25rem' }}>
-                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--success-text)' }}>What went right:</div>
-                              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.125rem', lineAngle: 1.4 }}>{item.aiGrade.what_was_right}</div>
 
-                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--error-text)', marginTop: '0.375rem' }}>What was off:</div>
-                              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.125rem', lineAngle: 1.4 }}>{item.aiGrade.what_was_off}</div>
-
-                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#1E40AF', marginTop: '0.375rem' }}>Suggested:</div>
-                              <div style={{ fontSize: '0.8rem', fontStyle: 'italic', color: '#1E40AF', marginTop: '0.125rem' }}>"{item.aiGrade.suggested_translation}"</div>
+                            <div>
+                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-light)', textTransform: 'uppercase', marginBottom: '0.375rem' }}>Google Translate (Reference):</div>
+                              <div style={{ fontSize: '0.85rem', color: '#1E40AF' }}>"{item.aiGrade.suggested_translation}"</div>
                             </div>
                           </div>
 
+                          <div style={{ marginTop: '0.875rem', paddingTop: '0.875rem', borderTop: '1px solid var(--border-gray)' }}>
+                            <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-light)', textTransform: 'uppercase', marginBottom: '0.375rem' }}>Your Translation:</div>
+                            <div style={{ fontSize: '0.85rem', color: 'var(--dark-navy)' }}>"{item.userTrans}"</div>
+                          </div>
                         </div>
                       );
                     })}
