@@ -755,6 +755,7 @@ body {
   border-color: var(--error-border);
   color: var(--error-text);
   animation: shake 0.35s ease-in-out;
+  pointer-events: none;
 }
 
 @keyframes shake {

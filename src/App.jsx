@@ -36,6 +36,10 @@ const saveLocalProfile = (userId, profile) => {
   localStorage.setItem(profileStorageKey(userId), JSON.stringify(profile));
 };
 
+const studyProgressStorageKey = (userId) => `languagelearner_study_progress_${userId}`;
+
+const matchingCardKey = (card) => `${card.id}|${card.side}`;
+
 
 
 // ==========================================
@@ -219,6 +223,66 @@ const cleanText = (str) => {
     .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?¿¡]/g, "")
     .replace(/\s+/g, " ")
     .trim();
+};
+
+const levenshteinDistance = (a, b) => {
+  if (a === b) return 0;
+  if (!a) return b.length;
+  if (!b) return a.length;
+
+  const m = a.length;
+  const n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1, // deletion
+        dp[i][j - 1] + 1, // insertion
+        dp[i - 1][j - 1] + cost // substitution
+      );
+    }
+  }
+  return dp[m][n];
+};
+
+const getAnswerVariants = (definition) => {
+  const raw = String(definition || "");
+  // Allow simple multi-answer definitions like: "to look / watch; see"
+  return raw
+    .split(/[\/;|]| or /i)
+    .map((s) => cleanText(s))
+    .filter(Boolean);
+};
+
+const isSmartMatch = (userAnswerRaw, targetDefinitionRaw) => {
+  const user = cleanText(userAnswerRaw);
+  if (!user) return false;
+
+  const variants = getAnswerVariants(targetDefinitionRaw);
+  if (variants.length === 0) return false;
+
+  return variants.some((target) => {
+    if (!target) return false;
+    if (user === target) return true;
+
+    // Similarity by edit distance
+    const dist = levenshteinDistance(user, target);
+    const maxLen = Math.max(user.length, target.length);
+    const similarity = maxLen === 0 ? 1 : 1 - dist / maxLen;
+
+    // Tight threshold for short answers; slightly looser for longer
+    const allowedDist =
+      maxLen <= 4 ? 0 :
+      maxLen <= 7 ? 1 :
+      maxLen <= 11 ? 2 : 3;
+
+    return dist <= allowedDist || similarity >= 0.86;
+  });
 };
 
 // Direct Web API fetch to Google Translate (Free Public API fallback)
@@ -1120,13 +1184,6 @@ export default function App() {
     }
   };
 
-  // Choose a deck loaded from cloud
-  const handleSelectCloudDeck = (cloudDeckObj) => {
-    setCustomDeck(cloudDeckObj.cards);
-    setCurrentDeckName("custom");
-    showBanner(`Loaded deck: ${cloudDeckObj.name}`, 'success');
-  };
-
   // Active loaded deck resolver
   const getActiveDeck = () => {
     return customDeck;
@@ -1139,14 +1196,122 @@ export default function App() {
   const [isCardFlipped, setIsCardFlipped] = useState(false);
   const [knownCardIds, setKnownCardIds] = useState(new Set());
   const [learningCardIds, setLearningCardIds] = useState(new Set());
+  const [activeCloudDeckId, setActiveCloudDeckId] = useState(null);
+  const progressSaveTimerRef = useRef(null);
 
-  useEffect(() => {
-    setFlashcardIndex(0);
-    setIsCardFlipped(false);
-  }, [customDeck]);
+  const getDeckProgressKey = () => {
+    if (activeCloudDeckId) return activeCloudDeckId;
+    if (customDeck.length > 0) return `local:${currentDeckName}`;
+    return null;
+  };
+
+  const readStudyProgressRoot = () => {
+    const fromProfile = userProfile?.study_progress;
+    if (fromProfile && typeof fromProfile === 'object') {
+      return { decks: {}, ...fromProfile };
+    }
+    if (!session) return { decks: {} };
+    try {
+      const raw = localStorage.getItem(studyProgressStorageKey(session.user.id));
+      return raw ? { decks: {}, ...JSON.parse(raw) } : { decks: {} };
+    } catch {
+      return { decks: {} };
+    }
+  };
+
+  const persistStudyProgressRoot = async (root) => {
+    if (!session) return;
+    localStorage.setItem(studyProgressStorageKey(session.user.id), JSON.stringify(root));
+
+    if (!supabaseClient) return;
+
+    const { error } = await supabaseClient
+      .from('user_profiles')
+      .update({
+        study_progress: root,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', session.user.id);
+
+    if (!error) {
+      setUserProfile((prev) => (prev ? { ...prev, study_progress: root } : prev));
+      return;
+    }
+
+    if (!isMissingProfilesTable(error)) {
+      console.error('Save study progress error:', error);
+    }
+  };
+
+  const applyDeckProgress = (deckKey, deckLength) => {
+    const entry = readStudyProgressRoot().decks?.[deckKey];
+    if (!entry) {
+      setKnownCardIds(new Set());
+      setLearningCardIds(new Set());
+      setFlashcardIndex(0);
+      return;
+    }
+    setKnownCardIds(new Set(entry.knownIds || []));
+    setLearningCardIds(new Set(entry.learningIds || []));
+    const idx = entry.flashcardIndex ?? 0;
+    setFlashcardIndex(deckLength > 0 ? Math.min(idx, deckLength - 1) : 0);
+  };
+
+  const saveProgressForDeck = async (deckKey, deckLength) => {
+    if (!session || !deckKey || deckLength === 0) return;
+    const root = readStudyProgressRoot();
+    root.decks = root.decks || {};
+    root.decks[deckKey] = {
+      knownIds: [...knownCardIds],
+      learningIds: [...learningCardIds],
+      flashcardIndex: Math.min(flashcardIndex, Math.max(deckLength - 1, 0)),
+      updatedAt: new Date().toISOString(),
+    };
+    root.lastDeckId = deckKey;
+    await persistStudyProgressRoot(root);
+  };
 
   const activeDeck = getActiveDeck();
   const currentFlashcard = activeDeck[flashcardIndex];
+
+  const handleSelectCloudDeck = async (cloudDeckObj) => {
+    const previousKey = getDeckProgressKey();
+    if (previousKey && activeDeck.length > 0) {
+      await saveProgressForDeck(previousKey, activeDeck.length);
+    }
+
+    setActiveCloudDeckId(cloudDeckObj.id);
+    setCustomDeck(cloudDeckObj.cards);
+    setCurrentDeckName(cloudDeckObj.name);
+    applyDeckProgress(cloudDeckObj.id, cloudDeckObj.cards.length);
+    setIsCardFlipped(false);
+    showBanner(`Loaded deck: ${cloudDeckObj.name}`, 'success');
+  };
+
+  useEffect(() => {
+    if (!session) return;
+    const deckKey = getDeckProgressKey();
+    if (!deckKey || activeDeck.length === 0) return;
+
+    if (progressSaveTimerRef.current) {
+      clearTimeout(progressSaveTimerRef.current);
+    }
+    progressSaveTimerRef.current = setTimeout(() => {
+      saveProgressForDeck(deckKey, activeDeck.length);
+    }, 900);
+
+    return () => {
+      if (progressSaveTimerRef.current) clearTimeout(progressSaveTimerRef.current);
+    };
+  }, [
+    session?.user?.id,
+    activeCloudDeckId,
+    currentDeckName,
+    flashcardIndex,
+    knownCardIds,
+    learningCardIds,
+    activeDeck.length,
+  ]);
 
   const fileInputRef = useRef(null);
 
@@ -1223,8 +1388,11 @@ export default function App() {
 
   const confirmImportDeck = () => {
     if (csvPreviewCards.length > 0) {
+      setActiveCloudDeckId(null);
       setCustomDeck(csvPreviewCards);
       setCurrentDeckName("custom");
+      applyDeckProgress('local:custom', csvPreviewCards.length);
+      setIsCardFlipped(false);
       clearCsvImport();
     }
   };
@@ -1350,16 +1518,16 @@ export default function App() {
   const handleTypeSubmit = () => {
     if (learnState.isAnswerSubmitted) return;
     
-    const cleanedUser = cleanText(learnState.userAnswer);
-    const cleanedTarget = cleanText(learnState.currentQuestion.card.definition);
-    
-    const isCorrect = cleanedUser === cleanedTarget;
+    const isCorrect = isSmartMatch(
+      learnState.userAnswer,
+      learnState.currentQuestion.card.definition
+    );
     dispatchLearn({ type: 'SUBMIT_ANSWER', payload: { isCorrect } });
   };
 
   const handleMatchingCardClick = (card) => {
     if (learnState.matchingMatchedIds.includes(card.id)) return;
-    if (learnState.matchingMismatchedIds.includes(card.id)) return;
+    if (learnState.matchingMismatchedIds.includes(matchingCardKey(card))) return;
 
     const selected = learnState.matchingSelectedCard;
 
@@ -1386,11 +1554,14 @@ export default function App() {
         }
       } else {
         dispatchLearn({ type: 'INCREMENT_MISMATCHES' });
-        dispatchLearn({ type: 'SET_MISMATCHED_FLASH', payload: [selected.id, card.id] });
-        
+        dispatchLearn({
+          type: 'SET_MISMATCHED_FLASH',
+          payload: [matchingCardKey(selected), matchingCardKey(card)],
+        });
+
         setTimeout(() => {
           dispatchLearn({ type: 'SET_MISMATCHED_FLASH', payload: [] });
-        }, 500);
+        }, 700);
       }
     }
   };
@@ -1877,7 +2048,13 @@ export default function App() {
             ========================================== */}
         {activeTab === 'flashcards' && (
           <div className="flashcards-tab-container">
-            <div style={{ display: 'grid', gridTemplateColumns: activeDeck.length > 0 ? '1fr 340px' : '1fr', gap: '1.75rem' }}>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: dbConnected && (isInClass || isAdmin) ? '1fr 340px' : '1fr',
+                gap: '1.75rem',
+              }}
+            >
               
               {/* Left Side: Active Flashcard Viewer */}
               {activeDeck.length > 0 ? (
@@ -1887,6 +2064,11 @@ export default function App() {
                       <span className="custom-badge">
                         Card {flashcardIndex + 1} of {activeDeck.length}
                       </span>
+                      {session && (
+                        <span className="custom-badge" style={{ fontSize: '0.65rem', fontWeight: 600 }}>
+                          Progress saves automatically
+                        </span>
+                      )}
                       <div className="d-flex gap-2">
                         {knownCardIds.has(currentFlashcard.id) && (
                           <span className="custom-badge custom-badge-green">Mastered</span>
@@ -1977,38 +2159,9 @@ export default function App() {
                         : 'Join your class in Settings to access shared study decks.'}
                   </p>
 
-                  {/* Cloud Decks Loader Area */}
-                  {dbConnected && isInClass && cloudDecks.length > 0 && (
-                    <div style={{ maxWidth: '440px', margin: '0 auto 2rem', border: '1px solid var(--border-gray)', borderRadius: 'var(--radius-md)', padding: '1rem', backgroundColor: '#F8FAFC' }}>
-                      <h4 style={{ fontSize: '0.8rem', color: 'var(--dark-navy)', textTransform: 'uppercase', letterSpacing: '0.03em', fontWeight: 700, marginBottom: '0.75rem' }}>
-                        Load Deck from Supabase
-                      </h4>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                        {cloudDecks.map((deck) => (
-                          <div 
-                            key={deck.id}
-                            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'var(--white)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-gray)', fontSize: '0.85rem' }}
-                          >
-                            <span style={{ fontWeight: 600 }}>{deck.name} ({deck.cards.length} cards)</span>
-                            <button 
-                              className="btn btn-primary"
-                              style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }}
-                              onClick={() => handleSelectCloudDeck(deck)}
-                            >
-                              Load
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
                   {isAdmin && (
                     <div className="d-flex justify-between" style={{ maxWidth: '280px', margin: '0 auto' }}>
-                      <button 
-                        className="btn btn-primary"
-                        onClick={() => fileInputRef.current.click()}
-                      >
+                      <button className="btn btn-primary" onClick={() => fileInputRef.current.click()}>
                         Browse CSV File
                       </button>
                     </div>
@@ -2016,11 +2169,73 @@ export default function App() {
                 </div>
               )}
 
-              {/* Right Side CSV Uploader — admin only */}
-              {isAdmin && (
-              <div className="card" style={{ height: 'fit-content' }}>
-                <h3 className="card-title">Import Vocabulary (Admin)</h3>
-                <p className="card-subtitle" style={{ fontSize: '0.75rem' }}>Upload a file, or paste rows from Excel/Sheets (Spanish and English columns). Then publish for your class.</p>
+              {/* Right panel: Deck Library (always accessible) + Admin importer */}
+              {dbConnected && (isInClass || isAdmin) && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                  <div className="card" style={{ height: 'fit-content' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
+                      <div>
+                        <h3 className="card-title" style={{ marginBottom: 0 }}>Deck Library</h3>
+                        <p className="card-subtitle" style={{ fontSize: '0.75rem', marginTop: '0.35rem' }}>
+                          Select any published deck to study. You can switch back anytime.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ padding: '0.35rem 0.6rem', fontSize: '0.75rem', whiteSpace: 'nowrap' }}
+                        onClick={fetchCloudDecks}
+                        disabled={!isInClass && !isAdmin}
+                      >
+                        Refresh
+                      </button>
+                    </div>
+
+                    {cloudLoading ? (
+                      <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.75rem' }}>Loading decks…</p>
+                    ) : cloudDecks.length === 0 ? (
+                      <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.75rem' }}>
+                        No decks published for this class yet.
+                      </p>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.75rem' }}>
+                        {cloudDecks.map((deck) => (
+                          <div
+                            key={deck.id}
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              backgroundColor: 'var(--white)',
+                              padding: '0.5rem 0.75rem',
+                              borderRadius: 'var(--radius-sm)',
+                              border: '1px solid var(--border-gray)',
+                              fontSize: '0.85rem',
+                              gap: '0.5rem',
+                            }}
+                          >
+                            <div style={{ minWidth: 0, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {deck.name}
+                            </div>
+                            <button
+                              className="btn btn-primary"
+                              style={{ padding: '0.2rem 0.55rem', fontSize: '0.75rem', flexShrink: 0 }}
+                              onClick={() => handleSelectCloudDeck(deck)}
+                            >
+                              Use
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {isAdmin && (
+                    <div className="card" style={{ height: 'fit-content' }}>
+                      <h3 className="card-title">Import Vocabulary (Admin)</h3>
+                      <p className="card-subtitle" style={{ fontSize: '0.75rem' }}>
+                        Upload a file, or paste rows from Excel/Sheets (Spanish and English columns). Then publish for your class.
+                      </p>
 
                 {/* Dropzone Card */}
                 <div 
@@ -2140,6 +2355,8 @@ export default function App() {
                 )}
 
               </div>
+                  )}
+                </div>
               )}
 
             </div>
@@ -2297,7 +2514,6 @@ export default function App() {
                   {/* Free text grade template */}
                   {learnState.currentQuestion.type === 'type' && (
                     <div>
-                      <h3 className="question-prompt">Translate this word to English:</h3>
                       <div className="text-center" style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--dark-navy)', marginBottom: '1.25rem' }}>
                         "{learnState.currentQuestion.card.term}"
                       </div>
@@ -2375,15 +2591,15 @@ export default function App() {
                             let className = "matching-card";
                             const isSelected = learnState.matchingSelectedCard?.id === card.id && learnState.matchingSelectedCard?.side === 'es';
                             const isMatched = learnState.matchingMatchedIds.includes(card.id);
-                            const isMismatched = learnState.matchingMismatchedIds.includes(card.id);
+                            const isMismatched = learnState.matchingMismatchedIds.includes(matchingCardKey(card));
 
-                            if (isSelected) className += " selected";
+                            if (isSelected && !isMismatched) className += " selected";
                             if (isMatched) className += " matched";
                             if (isMismatched) className += " mismatched";
 
                             return (
                               <div 
-                                key={card.id} 
+                                key={matchingCardKey(card)} 
                                 className={className}
                                 onClick={() => handleMatchingCardClick(card)}
                               >
@@ -2399,15 +2615,15 @@ export default function App() {
                             let className = "matching-card";
                             const isSelected = learnState.matchingSelectedCard?.id === card.id && learnState.matchingSelectedCard?.side === 'en';
                             const isMatched = learnState.matchingMatchedIds.includes(card.id);
-                            const isMismatched = learnState.matchingMismatchedIds.includes(card.id);
+                            const isMismatched = learnState.matchingMismatchedIds.includes(matchingCardKey(card));
 
-                            if (isSelected) className += " selected";
+                            if (isSelected && !isMismatched) className += " selected";
                             if (isMatched) className += " matched";
                             if (isMismatched) className += " mismatched";
 
                             return (
                               <div 
-                                key={card.id} 
+                                key={matchingCardKey(card)} 
                                 className={className}
                                 onClick={() => handleMatchingCardClick(card)}
                               >

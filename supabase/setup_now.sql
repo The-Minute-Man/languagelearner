@@ -29,9 +29,13 @@ CREATE TABLE IF NOT EXISTS public.user_profiles (
   user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   email TEXT,
   active_class_id UUID REFERENCES public.classes(id) ON DELETE SET NULL,
+  study_progress JSONB DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+ALTER TABLE public.user_profiles
+  ADD COLUMN IF NOT EXISTS study_progress JSONB DEFAULT '{}'::jsonb;
 
 -- 5) Link decks & stories to classes
 ALTER TABLE public.decks ADD COLUMN IF NOT EXISTS class_id UUID REFERENCES public.classes(id) ON DELETE SET NULL;
