@@ -1,0 +1,6 @@
+Edit favicon HERE: public/favicon.svg
+
+Do NOT edit dist/favicon.svg — it is deleted and recopied on every "npm run build".
+Firebase Hosting deploys from dist/ after a build, so your icon must live in public/.
+
+After changing the file: npm run build, then deploy. Hard-refresh the browser (Ctrl+Shift+R) if the old icon is cached.

@@ -127,8 +127,17 @@ function CopyIcon({ className = "icon-svg" }) {
 // UTILITY FUNCTIONS
 // ==========================================
 
-// Safe plain JS CSV parser handling quotes and commas
+// Detect comma vs tab (Excel/Sheets paste)
+const detectDelimiter = (text) => {
+  const firstLine = text.split(/\r?\n/).find((line) => line.trim()) || '';
+  const tabs = (firstLine.match(/\t/g) || []).length;
+  const commas = (firstLine.match(/,/g) || []).length;
+  return tabs > commas ? '\t' : ',';
+};
+
+// Safe plain JS delimited parser (CSV or TSV) with quoted fields
 const parseCSV = (text) => {
+  const delimiter = detectDelimiter(text);
   const lines = [];
   let row = [];
   let inQuotes = false;
@@ -145,7 +154,7 @@ const parseCSV = (text) => {
       } else {
         inQuotes = !inQuotes;
       }
-    } else if (char === ',' && !inQuotes) {
+    } else if (char === delimiter && !inQuotes) {
       row.push(currentValue.trim());
       currentValue = "";
     } else if ((char === '\r' || char === '\n') && !inQuotes) {
@@ -494,6 +503,7 @@ export default function App() {
   const [customDeck, setCustomDeck] = useState([]);
   const [csvPreviewCards, setCsvPreviewCards] = useState([]);
   const [csvFileName, setCsvFileName] = useState("");
+  const [csvPasteText, setCsvPasteText] = useState("");
   const [isDraggingCsv, setIsDraggingCsv] = useState(false);
   
   // Loaded cloud decks from Supabase
@@ -1057,23 +1067,60 @@ export default function App() {
 
   const fileInputRef = useRef(null);
 
+  const applyCsvText = (text, sourceLabel = 'Pasted data') => {
+    const trimmed = String(text || '').trim();
+    if (!trimmed) {
+      setCsvPreviewCards([]);
+      setCsvFileName("");
+      return;
+    }
+    const parsed = parseCSV(trimmed);
+    setCsvPreviewCards(parsed);
+    setCsvFileName(parsed.length > 0 ? sourceLabel : "");
+    if (parsed.length === 0) {
+      alert('No valid rows found. Use two columns: Spanish term and English definition (comma- or tab-separated).');
+    }
+  };
+
   const handleCsvFile = (file) => {
     if (!file) return;
-    setCsvFileName(file.name);
     const reader = new FileReader();
     reader.onload = (e) => {
-      const text = e.target.result;
-      const parsed = parseCSV(text);
-      setCsvPreviewCards(parsed);
+      applyCsvText(e.target.result, file.name);
+      setCsvPasteText("");
     };
     reader.readAsText(file);
+  };
+
+  const handleCsvPasteArea = (e) => {
+    const pasted = e.clipboardData?.getData('text');
+    if (!pasted?.trim()) return;
+    e.preventDefault();
+    setCsvPasteText(pasted);
+    applyCsvText(pasted, 'Pasted data');
+  };
+
+  const handleParseCsvPaste = () => {
+    applyCsvText(csvPasteText, 'Pasted data');
+  };
+
+  const clearCsvImport = () => {
+    setCsvFileName("");
+    setCsvPreviewCards([]);
+    setCsvPasteText("");
   };
 
   const handleDrop = (e) => {
     e.preventDefault();
     setIsDraggingCsv(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+    if (e.dataTransfer.files?.length > 0) {
       handleCsvFile(e.dataTransfer.files[0]);
+      return;
+    }
+    const droppedText = e.dataTransfer.getData('text/plain');
+    if (droppedText?.trim()) {
+      setCsvPasteText(droppedText);
+      applyCsvText(droppedText, 'Dropped data');
     }
   };
 
@@ -1090,8 +1137,7 @@ export default function App() {
     if (csvPreviewCards.length > 0) {
       setCustomDeck(csvPreviewCards);
       setCurrentDeckName("custom");
-      setCsvPreviewCards([]);
-      setCsvFileName("");
+      clearCsvImport();
     }
   };
 
@@ -1836,7 +1882,7 @@ export default function App() {
               {isAdmin && (
               <div className="card" style={{ height: 'fit-content' }}>
                 <h3 className="card-title">Import Vocabulary (Admin)</h3>
-                <p className="card-subtitle" style={{ fontSize: '0.75rem' }}>Upload a CSV with term (Spanish) and definition (English) columns, then publish for your class.</p>
+                <p className="card-subtitle" style={{ fontSize: '0.75rem' }}>Upload a file, or paste rows from Excel/Sheets (Spanish and English columns). Then publish for your class.</p>
 
                 {/* Dropzone Card */}
                 <div 
@@ -1850,28 +1896,52 @@ export default function App() {
                     <UploadIcon className="icon-svg" />
                   </div>
                   <span className="dropzone-text">Drop CSV file here</span>
-                  <span className="dropzone-subtext">Clicking browse also works</span>
+                  <span className="dropzone-subtext">Click to browse</span>
                   <input 
                     type="file"
                     ref={fileInputRef}
                     className="file-input-hidden"
-                    accept=".csv"
+                    accept=".csv,.txt,text/csv"
                     onChange={(e) => handleCsvFile(e.target.files[0])}
                   />
+                </div>
+
+                <div
+                  style={{ marginTop: '1rem' }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <span className="settings-label" style={{ display: 'block', marginBottom: '0.375rem' }}>Or paste CSV / spreadsheet data</span>
+                  <textarea
+                    className="text-answer-input csv-paste-input"
+                    style={{ height: '110px', resize: 'vertical', fontFamily: 'ui-monospace, monospace', fontSize: '0.8rem' }}
+                    placeholder={'hola,hello\ngracias,thank you\n\nOr paste from Excel (tab-separated):\nhola\thello'}
+                    value={csvPasteText}
+                    onChange={(e) => setCsvPasteText(e.target.value)}
+                    onPaste={handleCsvPasteArea}
+                  />
+                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ flex: 1, fontSize: '0.8rem' }}
+                      disabled={!csvPasteText.trim()}
+                      onClick={handleParseCsvPaste}
+                    >
+                      Preview pasted rows
+                    </button>
+                  </div>
                 </div>
 
                 {csvFileName && (
                   <div style={{ marginTop: '0.875rem', fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span>📄 {csvFileName}</span>
                     <button 
+                      type="button"
                       className="btn" 
                       style={{ padding: '0.15rem 0.4rem', background: 'none', border: 'none', color: 'var(--error-red)', fontSize: '0.75rem' }}
-                      onClick={() => {
-                        setCsvFileName("");
-                        setCsvPreviewCards([]);
-                      }}
+                      onClick={clearCsvImport}
                     >
-                      Remove
+                      Clear
                     </button>
                   </div>
                 )}

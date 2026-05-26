@@ -295,6 +295,11 @@ body {
   font-size: 0.95rem;
 }
 
+.csv-paste-input {
+  width: 100%;
+  line-height: 1.45;
+}
+
 .dropzone-subtext {
   font-size: 0.75rem;
   color: var(--text-light);
