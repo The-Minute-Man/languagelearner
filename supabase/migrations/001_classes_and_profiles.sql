@@ -33,6 +33,10 @@ CREATE TABLE IF NOT EXISTS user_profiles (
 ALTER TABLE decks ADD COLUMN IF NOT EXISTS class_id UUID REFERENCES classes(id) ON DELETE SET NULL;
 ALTER TABLE stories ADD COLUMN IF NOT EXISTS class_id UUID REFERENCES classes(id) ON DELETE SET NULL;
 
+-- Columns used by the app / RLS backfill logic
+ALTER TABLE decks ADD COLUMN IF NOT EXISTS is_global BOOLEAN DEFAULT false;
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS is_global BOOLEAN DEFAULT false;
+
 -- Backfill existing global content to Spanish 200
 UPDATE decks
 SET class_id = (SELECT id FROM classes WHERE slug = 'spanish-200' LIMIT 1)

@@ -1,5 +1,6 @@
 import { useState, useReducer, useEffect, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import AppDialog from './components/AppDialog.jsx';
 
 // Auto-initialize Supabase from Vite env vars (VITE_ prefix exposes them to the browser build)
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
@@ -7,6 +8,10 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const supabaseAutoClient = (SUPABASE_URL && SUPABASE_ANON_KEY)
   ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
   : null;
+
+const APP_VERSION = import.meta.env.VITE_APP_VERSION ?? '0.0.0';
+const APP_BUILD_ID = import.meta.env.VITE_BUILD_ID ?? 'dev';
+const APP_DISPLAY_VERSION = `${APP_VERSION}.${APP_BUILD_ID}`;
 
 const ADMIN_EMAIL = 'samuel.joseph@live.com';
 const DEFAULT_CLASS_SLUG = 'spanish-200';
@@ -532,6 +537,60 @@ export default function App() {
   const activeClass = availableClasses.find((c) => c.id === activeClassId) ?? null;
   const isInClass = Boolean(activeClassId);
 
+  // In-app dialogs & banners (replaces window.alert / prompt)
+  const dialogResolveRef = useRef(null);
+  const [dialog, setDialog] = useState(null);
+  const [appBanner, setAppBanner] = useState(null);
+
+  const closeDialog = (result) => {
+    const resolve = dialogResolveRef.current;
+    dialogResolveRef.current = null;
+    setDialog(null);
+    resolve?.(result);
+  };
+
+  const showAlert = ({ title, message, variant = 'info' }) =>
+    new Promise((resolve) => {
+      dialogResolveRef.current = () => resolve(true);
+      setDialog({ type: 'alert', title, message, variant });
+    });
+
+  const showPrompt = ({
+    title,
+    message,
+    defaultValue = '',
+    placeholder = '',
+    submitLabel = 'Save',
+  }) =>
+    new Promise((resolve) => {
+      dialogResolveRef.current = (value) => resolve(value);
+      setDialog({
+        type: 'prompt',
+        title,
+        message,
+        defaultValue,
+        placeholder,
+        submitLabel,
+      });
+    });
+
+  const showForm = ({ title, message, fields, submitLabel = 'Submit' }) =>
+    new Promise((resolve) => {
+      dialogResolveRef.current = (value) => resolve(value);
+      const values = {};
+      fields.forEach((f) => {
+        values[f.id] = f.defaultValue ?? '';
+      });
+      setDialog({ type: 'form', title, message, fields, values, submitLabel });
+    });
+
+  const showBanner = (message, variant = 'success') => {
+    setAppBanner({ message, variant });
+    window.setTimeout(() => {
+      setAppBanner((current) => (current?.message === message ? null : current));
+    }, 4500);
+  };
+
   // Auto-verify Supabase connection and handle Auth Session
   useEffect(() => {
     if (!supabaseAutoClient) {
@@ -826,7 +885,11 @@ export default function App() {
         });
         return;
       }
-      alert('Could not join class: ' + err.message);
+      await showAlert({
+        title: 'Could not join class',
+        message: err.message,
+        variant: 'error',
+      });
     } finally {
       setClassActionLoading(false);
     }
@@ -874,7 +937,11 @@ export default function App() {
         setCloudStories([]);
         return;
       }
-      alert('Could not leave class: ' + err.message);
+      await showAlert({
+        title: 'Could not leave class',
+        message: err.message,
+        variant: 'error',
+      });
     } finally {
       setClassActionLoading(false);
     }
@@ -886,9 +953,12 @@ export default function App() {
     }
     const defaultId = await getDefaultClassId();
     if (!defaultId) {
-      alert(
-        'Spanish 200 was not found in the database. In Supabase → SQL Editor, run supabase/setup_now.sql, then hard-refresh this page (Ctrl+Shift+R).'
-      );
+      await showAlert({
+        title: 'Class not found',
+        message:
+          'Spanish 200 was not found in the database. In Supabase → SQL Editor, run supabase/setup_now.sql, then hard-refresh this page (Ctrl+Shift+R).',
+        variant: 'error',
+      });
       return;
     }
     await joinClass(defaultId);
@@ -996,14 +1066,23 @@ export default function App() {
 
     const publishClassId = await resolvePublishClassId();
     if (!publishClassId) {
-      alert('No class selected. Join a class in Settings or run the database migration.');
+      await showAlert({
+        title: 'No class selected',
+        message: 'Join a class in Settings before publishing a deck.',
+        variant: 'error',
+      });
       return;
     }
-    
-    const deckNameInput = prompt("Enter a name for this class study deck:", "Class Vocabulary");
-    if (!deckNameInput) return;
 
     const classLabel = activeClass?.name || 'Spanish 200';
+    const deckNameInput = await showPrompt({
+      title: 'Name this study deck',
+      message: `Students in ${classLabel} will see this deck in the library.`,
+      defaultValue: 'Class Vocabulary',
+      placeholder: 'Deck name',
+      submitLabel: 'Publish deck',
+    });
+    if (!deckNameInput) return;
 
     try {
       const { data: deckData, error: deckError } = await supabaseClient
@@ -1029,11 +1108,15 @@ export default function App() {
       const { error: cardsError } = await supabaseClient.from('cards').insert(cardsToInsert);
       if (cardsError) throw cardsError;
 
-      alert(`Success! Deck published for ${classLabel}.`);
+      showBanner(`Deck published for ${classLabel}.`, 'success');
       fetchCloudDecks();
     } catch (err) {
       console.error(err);
-      alert("Error saving deck: " + err.message);
+      await showAlert({
+        title: 'Could not publish deck',
+        message: err.message,
+        variant: 'error',
+      });
     }
   };
 
@@ -1041,7 +1124,7 @@ export default function App() {
   const handleSelectCloudDeck = (cloudDeckObj) => {
     setCustomDeck(cloudDeckObj.cards);
     setCurrentDeckName("custom");
-    alert(`Active Deck loaded: ${cloudDeckObj.name}`);
+    showBanner(`Loaded deck: ${cloudDeckObj.name}`, 'success');
   };
 
   // Active loaded deck resolver
@@ -1078,7 +1161,12 @@ export default function App() {
     setCsvPreviewCards(parsed);
     setCsvFileName(parsed.length > 0 ? sourceLabel : "");
     if (parsed.length === 0) {
-      alert('No valid rows found. Use two columns: Spanish term and English definition (comma- or tab-separated).');
+      showAlert({
+        title: 'No valid rows',
+        message:
+          'Use two columns: Spanish term and English definition. Separate with commas or tabs (paste from Excel works).',
+        variant: 'error',
+      });
     }
   };
 
@@ -1386,14 +1474,39 @@ export default function App() {
 
     const publishClassId = await resolvePublishClassId();
     if (!publishClassId) {
-      alert('No class selected. Join a class in Settings or run the database migration.');
+      await showAlert({
+        title: 'No class selected',
+        message: 'Join a class in Settings before publishing a story.',
+        variant: 'error',
+      });
       return;
     }
 
-    const title = prompt("Enter a title for the class story:");
-    if (!title) return;
-    const description = prompt("Enter a description for the class story:");
-    if (!description) return;
+    const values = await showForm({
+      title: 'Publish class story',
+      message: `This story will be shared with students in ${activeClass?.name || 'your class'}.`,
+      fields: [
+        {
+          id: 'title',
+          label: 'Story title',
+          required: true,
+          autoFocus: true,
+          placeholder: 'e.g. A day at the market',
+        },
+        {
+          id: 'description',
+          label: 'Description',
+          required: true,
+          multiline: true,
+          rows: 3,
+          placeholder: 'Short summary for students choosing a story',
+        },
+      ],
+      submitLabel: 'Publish story',
+    });
+    if (!values) return;
+
+    const { title, description } = values;
     
     // Parse the current custom text into sentences
     const sentences = customStoryText
@@ -1403,7 +1516,11 @@ export default function App() {
       .map(s => ({ text: s + ".", translation: "(Pending Translation)" }));
       
     if (sentences.length === 0) {
-      alert("No valid sentences found to publish.");
+      await showAlert({
+        title: 'No sentences found',
+        message: 'Paste Spanish text with proper punctuation so sentences can be split.',
+        variant: 'error',
+      });
       return;
     }
 
@@ -1417,12 +1534,16 @@ export default function App() {
         class_id: publishClassId,
       });
       if (error) throw error;
-      alert(`Success! Story published for ${activeClass?.name || 'your class'}.`);
+      showBanner(`Story published for ${activeClass?.name || 'your class'}.`, 'success');
       setCustomStoryText("");
       fetchCloudStories();
     } catch (err) {
       console.error(err);
-      alert("Error publishing global story: " + err.message);
+      await showAlert({
+        title: 'Could not publish story',
+        message: err.message,
+        variant: 'error',
+      });
     }
   };
 
@@ -1636,8 +1757,11 @@ export default function App() {
       <header className="app-header">
         <div className="header-container">
           <div className="brand">
-            <span className="brand-indicator"></span>
-            <span>Language Learner</span>
+            <span className="brand-indicator" aria-hidden="true" />
+            <div className="brand-text-wrap">
+              <span className="brand-title">Language Learner</span>
+              <span className="brand-version" title={`Build ${APP_BUILD_ID}`}>v{APP_DISPLAY_VERSION}</span>
+            </div>
           </div>
 
           <div className="navigation-tabs">
@@ -1698,6 +1822,20 @@ export default function App() {
           MAIN AREA
           ========================================== */}
       <main className="main-content">
+
+        {appBanner && (
+          <div className={`app-banner app-banner--${appBanner.variant}`} role="status">
+            <span>{appBanner.message}</span>
+            <button
+              type="button"
+              className="app-banner-dismiss"
+              aria-label="Dismiss"
+              onClick={() => setAppBanner(null)}
+            >
+              ×
+            </button>
+          </div>
+        )}
         
         {/* Supabase connection indicator banner (For Flashcards / Learn) */}
         {activeTab !== 'settings' && dbConnected && (
@@ -2854,6 +2992,8 @@ export default function App() {
           Language Learner - Cloud Spanish Tutor. Built with Vite, React, Google APIs, and Supabase.
         </p>
       </footer>
+
+      <AppDialog dialog={dialog} onClose={closeDialog} />
     </div>
   );
 }

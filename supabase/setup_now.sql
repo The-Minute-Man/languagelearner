@@ -37,6 +37,10 @@ CREATE TABLE IF NOT EXISTS public.user_profiles (
 ALTER TABLE public.decks ADD COLUMN IF NOT EXISTS class_id UUID REFERENCES public.classes(id) ON DELETE SET NULL;
 ALTER TABLE public.stories ADD COLUMN IF NOT EXISTS class_id UUID REFERENCES public.classes(id) ON DELETE SET NULL;
 
+-- Ensure expected columns exist (app uses these fields)
+ALTER TABLE public.decks ADD COLUMN IF NOT EXISTS is_global BOOLEAN DEFAULT false;
+ALTER TABLE public.stories ADD COLUMN IF NOT EXISTS is_global BOOLEAN DEFAULT false;
+
 UPDATE public.decks
 SET class_id = (SELECT id FROM public.classes WHERE slug = 'spanish-200' OR name = 'Spanish 200' ORDER BY created_at LIMIT 1)
 WHERE class_id IS NULL;
