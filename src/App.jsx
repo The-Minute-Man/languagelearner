@@ -8,6 +8,9 @@ const supabaseAutoClient = (SUPABASE_URL && SUPABASE_ANON_KEY)
   ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
   : null;
 
+const ADMIN_EMAIL = 'samuel.joseph@live.com';
+const DEFAULT_CLASS_SLUG = 'spanish-200';
+
 
 
 // ==========================================
@@ -487,7 +490,17 @@ export default function App() {
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
   
-  const isAdmin = session?.user?.email === 'samuel.joseph@live.com';
+  const isAdmin = session?.user?.email === ADMIN_EMAIL;
+
+  // Class membership (default: Spanish 200)
+  const [availableClasses, setAvailableClasses] = useState([]);
+  const [userProfile, setUserProfile] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [classActionLoading, setClassActionLoading] = useState(false);
+
+  const activeClassId = userProfile?.active_class_id ?? null;
+  const activeClass = availableClasses.find((c) => c.id === activeClassId) ?? null;
+  const isInClass = Boolean(activeClassId);
 
   // Auto-verify Supabase connection and handle Auth Session
   useEffect(() => {
@@ -583,16 +596,150 @@ export default function App() {
     if (!supabaseAutoClient) return;
     await supabaseAutoClient.auth.signOut();
     setSession(null);
+    setUserProfile(null);
+  };
+
+  const getDefaultClassId = async () => {
+    if (!supabaseClient) return null;
+    const { data } = await supabaseClient
+      .from('classes')
+      .select('id')
+      .eq('slug', DEFAULT_CLASS_SLUG)
+      .maybeSingle();
+    return data?.id ?? null;
+  };
+
+  const resolvePublishClassId = async () => {
+    if (activeClassId) return activeClassId;
+    return getDefaultClassId();
+  };
+
+  const fetchAvailableClasses = async () => {
+    if (!supabaseClient) return;
+    const { data, error } = await supabaseClient
+      .from('classes')
+      .select('*')
+      .order('name');
+    if (!error) setAvailableClasses(data || []);
+  };
+
+  const fetchUserProfile = async () => {
+    if (!supabaseClient || !session) return null;
+    const { data, error } = await supabaseClient
+      .from('user_profiles')
+      .select('*')
+      .eq('user_id', session.user.id)
+      .maybeSingle();
+    if (error) {
+      console.error('Fetch profile error:', error);
+      return null;
+    }
+    setUserProfile(data);
+    return data;
+  };
+
+  const ensureUserProfile = async () => {
+    if (!supabaseClient || !session) return;
+    setProfileLoading(true);
+    try {
+      const existing = await fetchUserProfile();
+      if (existing) return existing;
+
+      const defaultClassId = await getDefaultClassId();
+      const { data: created, error } = await supabaseClient
+        .from('user_profiles')
+        .insert({
+          user_id: session.user.id,
+          email: session.user.email,
+          active_class_id: defaultClassId,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      setUserProfile(created);
+      return created;
+    } catch (err) {
+      console.error('Ensure profile error:', err);
+      return null;
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  const joinClass = async (classId) => {
+    if (!supabaseClient || !session || !classId) return;
+    setClassActionLoading(true);
+    try {
+      const payload = {
+        active_class_id: classId,
+        email: session.user.email,
+        updated_at: new Date().toISOString(),
+      };
+      const { error } = userProfile
+        ? await supabaseClient
+            .from('user_profiles')
+            .update(payload)
+            .eq('user_id', session.user.id)
+        : await supabaseClient.from('user_profiles').insert({
+            user_id: session.user.id,
+            ...payload,
+          });
+      if (error) throw error;
+      await fetchUserProfile();
+    } catch (err) {
+      alert('Could not join class: ' + err.message);
+    } finally {
+      setClassActionLoading(false);
+    }
+  };
+
+  const leaveClass = async () => {
+    if (!supabaseClient || !session) return;
+    setClassActionLoading(true);
+    try {
+      const { error } = await supabaseClient
+        .from('user_profiles')
+        .update({
+          active_class_id: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('user_id', session.user.id);
+      if (error) throw error;
+      await fetchUserProfile();
+      setCloudDecks([]);
+      setCloudStories([]);
+    } catch (err) {
+      alert('Could not leave class: ' + err.message);
+    } finally {
+      setClassActionLoading(false);
+    }
+  };
+
+  const rejoinDefaultClass = async () => {
+    const defaultId = await getDefaultClassId();
+    if (!defaultId) {
+      alert('Default class is not set up yet. Run the Supabase migration in supabase/migrations/.');
+      return;
+    }
+    await joinClass(defaultId);
   };
 
   // Fetch available decks from Supabase Cloud
   const fetchCloudDecks = async () => {
     if (!supabaseClient) return;
+    if (!isAdmin && !activeClassId) {
+      setCloudDecks([]);
+      return;
+    }
     setCloudLoading(true);
     try {
-      const { data: decksData, error: decksError } = await supabaseClient
-        .from('decks')
-        .select('*');
+      let query = supabaseClient.from('decks').select('*');
+      if (activeClassId) {
+        query = query.eq('class_id', activeClassId);
+      }
+
+      const { data: decksData, error: decksError } = await query;
 
       if (decksError) throw decksError;
 
@@ -623,11 +770,24 @@ export default function App() {
   // Fetch available stories from Supabase Cloud
   const fetchCloudStories = async () => {
     if (!supabaseClient) return;
+    if (!isAdmin && !activeClassId) {
+      setCloudStories([]);
+      return;
+    }
     setStoriesLoading(true);
     try {
-      const { data, error } = await supabaseClient.from('stories').select('*');
+      let query = supabaseClient.from('stories').select('*');
+      if (activeClassId) {
+        query = query.eq('class_id', activeClassId);
+      }
+      const { data, error } = await query;
       if (error) throw error;
-      setCloudStories(data || []);
+      setCloudStories(
+        (data || []).map((s) => ({
+          ...s,
+          sentences: s.sentences_jsonb || s.sentences || [],
+        }))
+      );
     } catch (err) {
       console.error("Fetch Cloud Stories Error:", err);
     } finally {
@@ -635,32 +795,56 @@ export default function App() {
     }
   };
 
-  // Trigger deck and story fetch when DB state changes to connected and user is logged in
+  // Load classes + profile when user signs in
   useEffect(() => {
-    if (dbConnected && session) {
+    if (!dbConnected || !session || !supabaseClient) {
+      setUserProfile(null);
+      return;
+    }
+    const initProfile = async () => {
+      await fetchAvailableClasses();
+      await ensureUserProfile();
+    };
+    initProfile();
+  }, [dbConnected, session?.user?.id]);
+
+  // Trigger deck and story fetch when DB state changes or class membership changes
+  useEffect(() => {
+    if (dbConnected && session && !profileLoading) {
       fetchCloudDecks();
       fetchCloudStories();
-    } else {
+    } else if (!session) {
       setCloudDecks([]);
       setCloudStories([]);
     }
-  }, [dbConnected, session]);
+  }, [dbConnected, session?.user?.id, activeClassId, profileLoading, isAdmin]);
 
-  // Save current active deck to Supabase
-  const handleSaveDeckToCloud = async () => {
+  // Save current active deck to Supabase (admin only — class-scoped)
+  const handleSaveGlobalDeck = async () => {
+    if (!isAdmin) return;
     const activeDeck = getActiveDeck();
     if (!supabaseClient || activeDeck.length === 0) return;
+
+    const publishClassId = await resolvePublishClassId();
+    if (!publishClassId) {
+      alert('No class selected. Join a class in Settings or run the database migration.');
+      return;
+    }
     
-    const deckNameInput = prompt("Enter a name for this cloud deck:", "My Spanish Vocabulary");
+    const deckNameInput = prompt("Enter a name for this class study deck:", "Class Vocabulary");
     if (!deckNameInput) return;
+
+    const classLabel = activeClass?.name || 'Spanish 200';
 
     try {
       const { data: deckData, error: deckError } = await supabaseClient
         .from('decks')
         .insert({ 
           name: deckNameInput, 
-          description: "Synchronized from client uploader",
-          user_id: session.user.id
+          description: `Official deck for ${classLabel}`,
+          user_id: session.user.id,
+          is_global: true,
+          class_id: publishClassId,
         })
         .select()
         .single();
@@ -676,50 +860,11 @@ export default function App() {
       const { error: cardsError } = await supabaseClient.from('cards').insert(cardsToInsert);
       if (cardsError) throw cardsError;
 
-      alert("Success! Deck saved to Supabase Cloud.");
+      alert(`Success! Deck published for ${classLabel}.`);
       fetchCloudDecks();
     } catch (err) {
       console.error(err);
       alert("Error saving deck: " + err.message);
-    }
-  };
-
-  // Save current active deck to Supabase (GLOBAL for Admin)
-  const handleSaveGlobalDeck = async () => {
-    const activeDeck = getActiveDeck();
-    if (!supabaseClient || activeDeck.length === 0) return;
-    
-    const deckNameInput = prompt("ADMIN: Enter a name for this GLOBAL cloud deck:", "Global Vocabulary");
-    if (!deckNameInput) return;
-
-    try {
-      const { data: deckData, error: deckError } = await supabaseClient
-        .from('decks')
-        .insert({ 
-          name: deckNameInput, 
-          description: "Global Official Deck",
-          user_id: session.user.id,
-          is_global: true
-        })
-        .select()
-        .single();
-
-      if (deckError) throw deckError;
-
-      const cardsToInsert = activeDeck.map(c => ({
-        deck_id: deckData.id,
-        term: c.term,
-        definition: c.definition
-      }));
-
-      const { error: cardsError } = await supabaseClient.from('cards').insert(cardsToInsert);
-      if (cardsError) throw cardsError;
-
-      alert("Success! Global Deck saved to Supabase Cloud.");
-      fetchCloudDecks();
-    } catch (err) {
-      console.error(err);
-      alert("Error saving global deck: " + err.message);
     }
   };
 
@@ -1032,10 +1177,17 @@ export default function App() {
   };
 
   const handlePublishGlobalStory = async () => {
-    if (!supabaseClient) return;
-    const title = prompt("ADMIN: Enter a title for the global story:");
+    if (!supabaseClient || !isAdmin) return;
+
+    const publishClassId = await resolvePublishClassId();
+    if (!publishClassId) {
+      alert('No class selected. Join a class in Settings or run the database migration.');
+      return;
+    }
+
+    const title = prompt("Enter a title for the class story:");
     if (!title) return;
-    const description = prompt("ADMIN: Enter a description for the global story:");
+    const description = prompt("Enter a description for the class story:");
     if (!description) return;
     
     // Parse the current custom text into sentences
@@ -1056,10 +1208,11 @@ export default function App() {
         description,
         sentences_jsonb: sentences,
         user_id: session.user.id,
-        is_global: true
+        is_global: true,
+        class_id: publishClassId,
       });
       if (error) throw error;
-      alert("Success! Global Story published.");
+      alert(`Success! Story published for ${activeClass?.name || 'your class'}.`);
       setCustomStoryText("");
       fetchCloudStories();
     } catch (err) {
@@ -1195,34 +1348,8 @@ export default function App() {
   };
 
   // SQL scaffolding script text
-  const SQL_SCRIPTS = `-- Create decks table
-CREATE TABLE IF NOT EXISTS decks (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name TEXT NOT NULL,
-  description TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Create cards table
-CREATE TABLE IF NOT EXISTS cards (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  deck_id UUID REFERENCES decks(id) ON DELETE CASCADE,
-  term TEXT NOT NULL,
-  definition TEXT NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Create translation history table
-CREATE TABLE IF NOT EXISTS translation_history (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  story_title TEXT NOT NULL,
-  sentence_index INT NOT NULL,
-  spanish_text TEXT NOT NULL,
-  user_translation TEXT NOT NULL,
-  score INT NOT NULL,
-  feedback JSONB NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);`;
+  const SQL_SCRIPTS = `-- See supabase/migrations/001_classes_and_profiles.sql for the full schema,
+-- including classes, user_profiles, class-scoped decks/stories, and RLS policies.`;
 
   // Render Auth View if not logged in
   if (!session) {
@@ -1337,6 +1464,16 @@ CREATE TABLE IF NOT EXISTS translation_history (
 
           {session && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              {isInClass && activeClass && (
+                <span className="custom-badge" style={{ fontSize: '0.7rem' }}>
+                  {activeClass.name}
+                </span>
+              )}
+              {!isInClass && !profileLoading && (
+                <span className="custom-badge custom-badge-yellow" style={{ fontSize: '0.7rem' }}>
+                  No class
+                </span>
+              )}
               <span style={{ fontSize: '0.85rem', color: 'var(--text-light)' }}>
                 {session.user.email}
               </span>
@@ -1362,34 +1499,33 @@ CREATE TABLE IF NOT EXISTS translation_history (
           <div className="sync-bar">
             <span className="sync-text">
               <CloudIcon className="icon-svg-sm" /> Connected to Supabase Cloud
+              {isInClass && activeClass ? ` · ${activeClass.name}` : ''}
             </span>
             <div className="d-flex gap-2">
               <button 
                 className="btn btn-secondary" 
                 style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
-                onClick={fetchCloudDecks}
+                onClick={() => { fetchCloudDecks(); fetchCloudStories(); }}
+                disabled={!isInClass && !isAdmin}
               >
-                Sync Decks
+                Sync Content
               </button>
-              {activeDeck.length > 0 && (
-                <button 
-                  className="btn btn-primary" 
-                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
-                  onClick={handleSaveDeckToCloud}
-                >
-                  Save Active Deck
-                </button>
-              )}
               {activeDeck.length > 0 && isAdmin && (
                 <button 
                   className="btn btn-primary" 
                   style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', backgroundColor: '#eab308', borderColor: '#ca8a04', color: 'black' }}
                   onClick={handleSaveGlobalDeck}
                 >
-                  Publish Global Deck (Admin)
+                  Publish Class Deck
                 </button>
               )}
             </div>
+          </div>
+        )}
+
+        {activeTab !== 'settings' && dbConnected && !profileLoading && !isInClass && (
+          <div style={{ maxWidth: '720px', margin: '0 auto 1rem', padding: '0.75rem 1rem', backgroundColor: 'var(--warning-light)', border: '1px solid var(--warning-border)', borderRadius: 'var(--radius-md)', fontSize: '0.85rem', color: 'var(--dark-navy)' }}>
+            You are not enrolled in a class. Open <strong>Settings</strong> to rejoin {availableClasses.find((c) => c.slug === DEFAULT_CLASS_SLUG)?.name || 'Spanish 200'} and access study decks and stories.
           </div>
         )}
 
@@ -1491,11 +1627,15 @@ CREATE TABLE IF NOT EXISTS translation_history (
                   </div>
                   <h2 className="card-title">Load Study Cards</h2>
                   <p className="card-subtitle" style={{ maxWidth: '440px', margin: '0 auto 1.5rem' }}>
-                    There are no cards in the study queue. Import a vocabulary deck from a CSV file or load existing cards from your Supabase connection.
+                    {isAdmin
+                      ? 'There are no cards in the study queue. Import a CSV deck or publish class content for students.'
+                      : isInClass
+                        ? 'Load a vocabulary deck shared for your class from the cloud library below.'
+                        : 'Join your class in Settings to access shared study decks.'}
                   </p>
 
                   {/* Cloud Decks Loader Area */}
-                  {dbConnected && cloudDecks.length > 0 && (
+                  {dbConnected && isInClass && cloudDecks.length > 0 && (
                     <div style={{ maxWidth: '440px', margin: '0 auto 2rem', border: '1px solid var(--border-gray)', borderRadius: 'var(--radius-md)', padding: '1rem', backgroundColor: '#F8FAFC' }}>
                       <h4 style={{ fontSize: '0.8rem', color: 'var(--dark-navy)', textTransform: 'uppercase', letterSpacing: '0.03em', fontWeight: 700, marginBottom: '0.75rem' }}>
                         Load Deck from Supabase
@@ -1520,21 +1660,24 @@ CREATE TABLE IF NOT EXISTS translation_history (
                     </div>
                   )}
 
-                  <div className="d-flex justify-between" style={{ maxWidth: '280px', margin: '0 auto' }}>
-                    <button 
-                      className="btn btn-primary"
-                      onClick={() => fileInputRef.current.click()}
-                    >
-                      Browse CSV File
-                    </button>
-                  </div>
+                  {isAdmin && (
+                    <div className="d-flex justify-between" style={{ maxWidth: '280px', margin: '0 auto' }}>
+                      <button 
+                        className="btn btn-primary"
+                        onClick={() => fileInputRef.current.click()}
+                      >
+                        Browse CSV File
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* Right Side CSV Uploader details */}
+              {/* Right Side CSV Uploader — admin only */}
+              {isAdmin && (
               <div className="card" style={{ height: 'fit-content' }}>
-                <h3 className="card-title">Import Vocabulary</h3>
-                <p className="card-subtitle" style={{ fontSize: '0.75rem' }}>Upload a CSV with term (Spanish) and definition (English) columns.</p>
+                <h3 className="card-title">Import Vocabulary (Admin)</h3>
+                <p className="card-subtitle" style={{ fontSize: '0.75rem' }}>Upload a CSV with term (Spanish) and definition (English) columns, then publish for your class.</p>
 
                 {/* Dropzone Card */}
                 <div 
@@ -1630,6 +1773,7 @@ CREATE TABLE IF NOT EXISTS translation_history (
                 )}
 
               </div>
+              )}
 
             </div>
           </div>
@@ -1646,7 +1790,11 @@ CREATE TABLE IF NOT EXISTS translation_history (
                   <FolderIcon className="icon-svg" />
                 </div>
                 <h2 className="card-title">Load Study Cards</h2>
-                <p className="card-subtitle">Please import a CSV deck in the Flashcards tab or load from Supabase Cloud to run Learn sessions.</p>
+                <p className="card-subtitle">
+                  {isInClass
+                    ? 'Load a class deck from the Flashcards tab to run Learn sessions.'
+                    : 'Join your class in Settings, then load a shared deck from Flashcards.'}
+                </p>
               </div>
             ) : learnState.settingsScreen ? (
               
@@ -2001,16 +2149,23 @@ CREATE TABLE IF NOT EXISTS translation_history (
                   >
                     Library Stories
                   </button>
+                  {isAdmin && (
                   <button 
                     className={`story-tab-btn ${storyActiveTab === 'custom' ? 'active' : ''}`}
                     onClick={() => setStoryActiveTab("custom")}
                   >
-                    Custom Paste Box
+                    Publish Story
                   </button>
+                  )}
                 </div>
 
                 {storyActiveTab === 'preset' && (
                   <div>
+                    {!isInClass && (
+                      <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
+                        Join a class in Settings to access library stories.
+                      </p>
+                    )}
                     <div className="story-list">
                       {cloudStories.map((story, i) => (
                         <div 
@@ -2029,6 +2184,7 @@ CREATE TABLE IF NOT EXISTS translation_history (
 
                     <button 
                       className="btn btn-primary w-full"
+                      disabled={!isInClass || cloudStories.length === 0}
                       onClick={() => startPresetStory(selectedStoryIndex)}
                     >
                       Start Story Practice
@@ -2036,14 +2192,14 @@ CREATE TABLE IF NOT EXISTS translation_history (
                   </div>
                 )}
 
-                {storyActiveTab === 'custom' && (
+                {storyActiveTab === 'custom' && isAdmin && (
                   <div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem', marginBottom: '1.25rem' }}>
-                      <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--dark-navy)', textTransform: 'uppercase' }}>Enter Spanish Content</span>
+                      <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--dark-navy)', textTransform: 'uppercase' }}>Enter Spanish Content (Admin)</span>
                       <textarea 
                         className="text-answer-input"
                         style={{ height: '120px', resize: 'vertical' }}
-                        placeholder="Paste or write Spanish text here. Punctuate sentences properly to segment correctly..."
+                        placeholder="Paste Spanish text to practice locally or publish for the class..."
                         value={customStoryText}
                         onChange={(e) => setCustomStoryText(e.target.value)}
                       />
@@ -2054,20 +2210,24 @@ CREATE TABLE IF NOT EXISTS translation_history (
                       disabled={!customStoryText.trim()}
                       onClick={startCustomStory}
                     >
-                      Process & Start Custom Story
+                      Process & Start (Preview)
                     </button>
 
-                    {isAdmin && (
-                      <button 
-                        className="btn btn-primary w-full"
-                        style={{ marginTop: '0.75rem', backgroundColor: '#eab308', borderColor: '#ca8a04', color: 'black' }}
-                        disabled={!customStoryText.trim()}
-                        onClick={handlePublishGlobalStory}
-                      >
-                        Publish Global Story (Admin)
-                      </button>
-                    )}
+                    <button 
+                      className="btn btn-primary w-full"
+                      style={{ marginTop: '0.75rem', backgroundColor: '#eab308', borderColor: '#ca8a04', color: 'black' }}
+                      disabled={!customStoryText.trim()}
+                      onClick={handlePublishGlobalStory}
+                    >
+                      Publish Class Story
+                    </button>
                   </div>
+                )}
+
+                {storyActiveTab === 'custom' && !isAdmin && (
+                  <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                    Custom stories are created by your instructor. Use <strong>Library Stories</strong> to practice class content.
+                  </p>
                 )}
 
               </div>
@@ -2368,7 +2528,90 @@ CREATE TABLE IF NOT EXISTS translation_history (
                 </div>
               </div>
 
-              {/* End of Settings */}
+              {/* Class enrollment */}
+              <div style={{ marginBottom: '2rem', borderBottom: '1px solid var(--border-gray)', paddingBottom: '1.5rem' }}>
+                <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--dark-navy)', marginBottom: '0.875rem' }}>Class Enrollment</h3>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1rem', lineHeight: 1.5 }}>
+                  New accounts are enrolled in <strong>Spanish 200</strong> by default. You can leave the class or switch to another course below. Study decks and stories are shared only with your current class.
+                </p>
+
+                {profileLoading ? (
+                  <span style={{ fontSize: '0.85rem', color: 'var(--text-light)' }}>Loading profile…</span>
+                ) : isInClass && activeClass ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    <div style={{ padding: '0.75rem 1rem', backgroundColor: 'var(--primary-light)', borderRadius: 'var(--radius-md)', border: '1px solid var(--primary-border)' }}>
+                      <span style={{ fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)' }}>Current class</span>
+                      <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--dark-navy)' }}>{activeClass.name}</div>
+                      {activeClass.description && (
+                        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.25rem', marginBottom: 0 }}>{activeClass.description}</p>
+                      )}
+                    </div>
+
+                    {availableClasses.length > 1 && (
+                      <div className="settings-group">
+                        <span className="settings-label">Switch class</span>
+                        <select
+                          className="settings-input"
+                          value={activeClassId}
+                          disabled={classActionLoading}
+                          onChange={(e) => joinClass(e.target.value)}
+                        >
+                          {availableClasses.map((c) => (
+                            <option key={c.id} value={c.id}>{c.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={classActionLoading}
+                      onClick={leaveClass}
+                    >
+                      {classActionLoading ? 'Updating…' : 'Leave class'}
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: 0 }}>
+                      You are not enrolled in a class. Rejoin to access shared decks and stories.
+                    </p>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      disabled={classActionLoading}
+                      onClick={rejoinDefaultClass}
+                    >
+                      {classActionLoading ? 'Joining…' : `Rejoin ${availableClasses.find((c) => c.slug === DEFAULT_CLASS_SLUG)?.name || 'Spanish 200'}`}
+                    </button>
+                    {availableClasses.length > 1 && (
+                      <div className="settings-group">
+                        <span className="settings-label">Or join another class</span>
+                        <select
+                          className="settings-input"
+                          defaultValue=""
+                          disabled={classActionLoading}
+                          onChange={(e) => {
+                            if (e.target.value) joinClass(e.target.value);
+                          }}
+                        >
+                          <option value="" disabled>Select a class…</option>
+                          {availableClasses.map((c) => (
+                            <option key={c.id} value={c.id}>{c.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {isAdmin && (
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-light)', marginTop: '1rem', marginBottom: 0 }}>
+                    You are signed in as the content admin. Only this account can publish class decks and stories.
+                  </p>
+                )}
+              </div>
 
             </div>
           </div>
