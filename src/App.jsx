@@ -12,6 +12,25 @@ const ADMIN_EMAIL = 'samuel.joseph@live.com';
 const DEFAULT_CLASS_SLUG = 'spanish-200';
 const DEFAULT_CLASS_NAME = 'Spanish 200';
 
+const profileStorageKey = (userId) => `languagelearner_profile_${userId}`;
+
+const isMissingProfilesTable = (error) =>
+  error?.code === 'PGRST205' ||
+  (typeof error?.message === 'string' && error.message.includes('user_profiles'));
+
+const loadLocalProfile = (userId) => {
+  try {
+    const raw = localStorage.getItem(profileStorageKey(userId));
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+};
+
+const saveLocalProfile = (userId, profile) => {
+  localStorage.setItem(profileStorageKey(userId), JSON.stringify(profile));
+};
+
 
 
 // ==========================================
@@ -601,17 +620,14 @@ export default function App() {
   };
 
   const getDefaultClassId = async () => {
+    const fromList =
+      availableClasses.find((c) => c.slug === DEFAULT_CLASS_SLUG || c.name === DEFAULT_CLASS_NAME) ??
+      availableClasses[0];
+    if (fromList?.id) return fromList.id;
+
     if (!supabaseClient) return null;
 
-    const { data: bySlug, error: slugError } = await supabaseClient
-      .from('classes')
-      .select('id')
-      .eq('slug', DEFAULT_CLASS_SLUG)
-      .maybeSingle();
-
-    if (!slugError && bySlug?.id) return bySlug.id;
-
-    // Legacy DBs: classes table has name but no slug column yet
+    // Name first — many DBs have classes without a slug column yet
     const { data: byName, error: nameError } = await supabaseClient
       .from('classes')
       .select('id')
@@ -621,6 +637,14 @@ export default function App() {
       .maybeSingle();
 
     if (!nameError && byName?.id) return byName.id;
+
+    const { data: bySlug, error: slugError } = await supabaseClient
+      .from('classes')
+      .select('id')
+      .eq('slug', DEFAULT_CLASS_SLUG)
+      .maybeSingle();
+
+    if (!slugError && bySlug?.id) return bySlug.id;
 
     const { data: anyClass } = await supabaseClient
       .from('classes')
@@ -657,22 +681,46 @@ export default function App() {
     setAvailableClasses(unique);
   };
 
+  const applyLocalProfile = (profile) => {
+    saveLocalProfile(session.user.id, profile);
+    setUserProfile(profile);
+    return profile;
+  };
+
   const fetchUserProfile = async () => {
     if (!supabaseClient || !session) return null;
+
     const { data, error } = await supabaseClient
       .from('user_profiles')
       .select('*')
       .eq('user_id', session.user.id)
       .maybeSingle();
-    if (error) {
-      console.error('Fetch profile error:', error);
-      if (error.code === 'PGRST205') {
-        setDbError('Database setup incomplete: run supabase/setup_now.sql in the Supabase SQL Editor.');
+
+    if (!error) {
+      if (data) {
+        saveLocalProfile(session.user.id, data);
+        setUserProfile(data);
+        return data;
+      }
+      const local = loadLocalProfile(session.user.id);
+      if (local) {
+        setUserProfile(local);
+        return local;
       }
       return null;
     }
-    setUserProfile(data);
-    return data;
+
+    if (isMissingProfilesTable(error)) {
+      const local = loadLocalProfile(session.user.id);
+      if (local) {
+        setUserProfile(local);
+        return local;
+      }
+      return null;
+    }
+
+    console.error('Fetch profile error:', error);
+    return null;
   };
 
   const ensureUserProfile = async () => {
@@ -693,13 +741,30 @@ export default function App() {
         .select()
         .single();
 
-      if (error) throw error;
-      setUserProfile(created);
-      return created;
+      if (!error) {
+        setUserProfile(created);
+        saveLocalProfile(session.user.id, created);
+        return created;
+      }
+
+      if (isMissingProfilesTable(error)) {
+        return applyLocalProfile({
+          user_id: session.user.id,
+          email: session.user.email,
+          active_class_id: defaultClassId,
+        });
+      }
+
+      throw error;
     } catch (err) {
       console.error('Ensure profile error:', err);
-      if (err?.code === 'PGRST205') {
-        setDbError('Run supabase/setup_now.sql in Supabase Dashboard → SQL Editor, then refresh this page.');
+      if (isMissingProfilesTable(err)) {
+        const defaultClassId = await getDefaultClassId();
+        return applyLocalProfile({
+          user_id: session.user.id,
+          email: session.user.email,
+          active_class_id: defaultClassId,
+        });
       }
       return null;
     } finally {
@@ -716,6 +781,7 @@ export default function App() {
         email: session.user.email,
         updated_at: new Date().toISOString(),
       };
+
       const { error } = userProfile
         ? await supabaseClient
             .from('user_profiles')
@@ -725,9 +791,31 @@ export default function App() {
             user_id: session.user.id,
             ...payload,
           });
-      if (error) throw error;
-      await fetchUserProfile();
+
+      if (!error) {
+        await fetchUserProfile();
+        return;
+      }
+
+      if (isMissingProfilesTable(error)) {
+        applyLocalProfile({
+          user_id: session.user.id,
+          email: session.user.email,
+          active_class_id: classId,
+        });
+        return;
+      }
+
+      throw error;
     } catch (err) {
+      if (isMissingProfilesTable(err)) {
+        applyLocalProfile({
+          user_id: session.user.id,
+          email: session.user.email,
+          active_class_id: classId,
+        });
+        return;
+      }
       alert('Could not join class: ' + err.message);
     } finally {
       setClassActionLoading(false);
@@ -745,11 +833,37 @@ export default function App() {
           updated_at: new Date().toISOString(),
         })
         .eq('user_id', session.user.id);
-      if (error) throw error;
-      await fetchUserProfile();
-      setCloudDecks([]);
-      setCloudStories([]);
+
+      if (!error) {
+        await fetchUserProfile();
+        setCloudDecks([]);
+        setCloudStories([]);
+        return;
+      }
+
+      if (isMissingProfilesTable(error)) {
+        applyLocalProfile({
+          user_id: session.user.id,
+          email: session.user.email,
+          active_class_id: null,
+        });
+        setCloudDecks([]);
+        setCloudStories([]);
+        return;
+      }
+
+      throw error;
     } catch (err) {
+      if (isMissingProfilesTable(err)) {
+        applyLocalProfile({
+          user_id: session.user.id,
+          email: session.user.email,
+          active_class_id: null,
+        });
+        setCloudDecks([]);
+        setCloudStories([]);
+        return;
+      }
       alert('Could not leave class: ' + err.message);
     } finally {
       setClassActionLoading(false);
@@ -757,9 +871,14 @@ export default function App() {
   };
 
   const rejoinDefaultClass = async () => {
+    if (availableClasses.length === 0) {
+      await fetchAvailableClasses();
+    }
     const defaultId = await getDefaultClassId();
     if (!defaultId) {
-      alert('No Spanish 200 class found. Open Supabase → SQL Editor, run the file supabase/setup_now.sql, then refresh.');
+      alert(
+        'Spanish 200 was not found in the database. In Supabase → SQL Editor, run supabase/setup_now.sql, then hard-refresh this page (Ctrl+Shift+R).'
+      );
       return;
     }
     await joinClass(defaultId);
