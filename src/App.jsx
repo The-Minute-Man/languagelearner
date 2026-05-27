@@ -42,6 +42,38 @@ const saveLocalProfile = (userId, profile) => {
 
 const studyProgressStorageKey = (userId) => `languagelearner_study_progress_${userId}`;
 
+const practiceQuestionsStorageKey = (userId) =>
+  userId ? `languagelearner_practice_questions_${userId}` : 'languagelearner_practice_questions_guest';
+
+const darkModeStorageKey = 'languagelearner_dark_mode';
+
+const makePracticeId = () => `pq-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+const parsePracticeBulkText = (text) => {
+  return String(text || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      let prompt = '';
+      let answer = '';
+      if (line.includes('|')) {
+        const idx = line.indexOf('|');
+        prompt = line.slice(0, idx).trim();
+        answer = line.slice(idx + 1).trim();
+      } else if (line.includes('\t')) {
+        const idx = line.indexOf('\t');
+        prompt = line.slice(0, idx).trim();
+        answer = line.slice(idx + 1).trim();
+      } else {
+        return null;
+      }
+      if (!prompt || !answer) return null;
+      return { id: makePracticeId(), prompt, answer };
+    })
+    .filter(Boolean);
+};
+
 const matchingCardKey = (card) => `${card.id}|${card.side}`;
 
 
@@ -562,10 +594,16 @@ function learnReducer(state, action) {
 // MAIN COMPONENT
 // ==========================================
 export default function App() {
-  const [activeTab, setActiveTab] = useState("flashcards"); // flashcards, learn, story, settings
-  
-  // API Keys / Configurations (In-Memory Only)
-  const [apiKey, setApiKey] = useState("");
+  const [activeTab, setActiveTab] = useState("flashcards"); // flashcards, learn, practice, story, settings
+
+  const [darkMode, setDarkMode] = useState(() => {
+    try {
+      return localStorage.getItem(darkModeStorageKey) === 'true';
+    } catch {
+      return false;
+    }
+  });
+
   // Supabase — auto-connected from .env, no manual entry needed
   const [supabaseClient, setSupabaseClient] = useState(supabaseAutoClient);
   const [dbConnected, setDbConnected] = useState(false);
@@ -658,6 +696,15 @@ export default function App() {
       setAppBanner((current) => (current?.message === message ? null : current));
     }, 4500);
   };
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', darkMode ? 'dark' : 'light');
+    try {
+      localStorage.setItem(darkModeStorageKey, darkMode ? 'true' : 'false');
+    } catch {
+      // ignore storage errors
+    }
+  }, [darkMode]);
 
   // Auto-verify Supabase connection and handle Auth Session
   useEffect(() => {
@@ -1202,6 +1249,7 @@ export default function App() {
   const [learningCardIds, setLearningCardIds] = useState(new Set());
   const [activeCloudDeckId, setActiveCloudDeckId] = useState(null);
   const progressSaveTimerRef = useRef(null);
+  const storyProgressSaveTimerRef = useRef(null);
 
   const getDeckProgressKey = () => {
     if (activeCloudDeckId) return activeCloudDeckId;
@@ -1212,14 +1260,14 @@ export default function App() {
   const readStudyProgressRoot = () => {
     const fromProfile = userProfile?.study_progress;
     if (fromProfile && typeof fromProfile === 'object') {
-      return { decks: {}, ...fromProfile };
+      return { decks: {}, stories: {}, ...fromProfile };
     }
-    if (!session) return { decks: {} };
+    if (!session) return { decks: {}, stories: {} };
     try {
       const raw = localStorage.getItem(studyProgressStorageKey(session.user.id));
-      return raw ? { decks: {}, ...JSON.parse(raw) } : { decks: {} };
+      return raw ? { decks: {}, stories: {}, ...JSON.parse(raw) } : { decks: {}, stories: {} };
     } catch {
-      return { decks: {} };
+      return { decks: {}, stories: {} };
     }
   };
 
@@ -1272,6 +1320,44 @@ export default function App() {
       updatedAt: new Date().toISOString(),
     };
     root.lastDeckId = deckKey;
+    await persistStudyProgressRoot(root);
+  };
+
+  const getStoryProgressKey = (storyObj = activeStory) => {
+    if (!storyObj) return null;
+    if (storyObj.id) return `story:${storyObj.id}`;
+    const title = (storyObj.title || 'custom').toLowerCase().trim();
+    const firstSentence = (storyObj.sentences?.[0]?.text || '').slice(0, 40).toLowerCase();
+    return `story:local:${title}:${storyObj.sentences?.length || 0}:${firstSentence}`;
+  };
+
+  const applyStoryProgress = (storyKey, sentenceCount) => {
+    const entry = readStudyProgressRoot().stories?.[storyKey];
+    if (!entry) {
+      setCurrentSentenceIndex(0);
+      setStoryFeed([]);
+      setShowStoryEnd(false);
+      return;
+    }
+    const savedFeed = Array.isArray(entry.storyFeed) ? entry.storyFeed : [];
+    const maxIndex = Math.max(sentenceCount - 1, 0);
+    const savedIndex = Math.min(entry.currentSentenceIndex ?? savedFeed.length ?? 0, maxIndex);
+    setStoryFeed(savedFeed);
+    setCurrentSentenceIndex(savedIndex);
+    setShowStoryEnd(Boolean(entry.showStoryEnd) || (sentenceCount > 0 && savedFeed.length >= sentenceCount));
+  };
+
+  const saveProgressForStory = async (storyKey, sentenceCount) => {
+    if (!session || !storyKey || sentenceCount === 0) return;
+    const root = readStudyProgressRoot();
+    root.stories = root.stories || {};
+    root.stories[storyKey] = {
+      currentSentenceIndex: Math.min(currentSentenceIndex, Math.max(sentenceCount - 1, 0)),
+      storyFeed,
+      showStoryEnd,
+      updatedAt: new Date().toISOString(),
+    };
+    root.lastStoryId = storyKey;
     await persistStudyProgressRoot(root);
   };
 
@@ -1592,8 +1678,148 @@ export default function App() {
   const [storyFeed, setStoryFeed] = useState([]);
   
   const [gradingLoading, setGradingLoading] = useState(false);
-  const [apiWarningTranslate, setApiWarningTranslate] = useState(false);
   const [showStoryEnd, setShowStoryEnd] = useState(false);
+
+  // ==========================================
+  // PART 4: PRACTICE MODE (past test questions)
+  // ==========================================
+  const [practiceQuestions, setPracticeQuestions] = useState([]);
+  const [practiceDraftPrompt, setPracticeDraftPrompt] = useState('');
+  const [practiceDraftAnswer, setPracticeDraftAnswer] = useState('');
+  const [practiceBulkText, setPracticeBulkText] = useState('');
+  const [practiceSessionActive, setPracticeSessionActive] = useState(false);
+  const [practiceSessionEnded, setPracticeSessionEnded] = useState(false);
+  const [practiceQueue, setPracticeQueue] = useState([]);
+  const [practiceCursor, setPracticeCursor] = useState(0);
+  const [practiceInput, setPracticeInput] = useState('');
+  const [practiceSubmitted, setPracticeSubmitted] = useState(false);
+  const [practiceWasCorrect, setPracticeWasCorrect] = useState(false);
+  const [practiceSessionCorrect, setPracticeSessionCorrect] = useState(0);
+
+  useEffect(() => {
+    const key = practiceQuestionsStorageKey(session?.user?.id);
+    try {
+      const raw = localStorage.getItem(key);
+      setPracticeQuestions(raw ? JSON.parse(raw) : []);
+    } catch {
+      setPracticeQuestions([]);
+    }
+    setPracticeSessionActive(false);
+    setPracticeSessionEnded(false);
+    setPracticeQueue([]);
+    setPracticeCursor(0);
+  }, [session?.user?.id]);
+
+  useEffect(() => {
+    const key = practiceQuestionsStorageKey(session?.user?.id);
+    try {
+      localStorage.setItem(key, JSON.stringify(practiceQuestions));
+    } catch {
+      // ignore storage errors
+    }
+  }, [practiceQuestions, session?.user?.id]);
+
+  const persistPracticeQuestions = (nextQuestions) => {
+    setPracticeQuestions(nextQuestions);
+    const key = practiceQuestionsStorageKey(session?.user?.id);
+    try {
+      localStorage.setItem(key, JSON.stringify(nextQuestions));
+    } catch {
+      // ignore storage errors
+    }
+  };
+
+  const handleAddPracticeQuestion = () => {
+    const prompt = practiceDraftPrompt.trim();
+    const answer = practiceDraftAnswer.trim();
+    if (!prompt || !answer) return;
+    persistPracticeQuestions([
+      ...practiceQuestions,
+      { id: makePracticeId(), prompt, answer },
+    ]);
+    setPracticeDraftPrompt('');
+    setPracticeDraftAnswer('');
+  };
+
+  const handleImportPracticeBulk = () => {
+    const imported = parsePracticeBulkText(practiceBulkText);
+    if (imported.length === 0) {
+      showAlert({
+        title: 'No questions found',
+        message: 'Add one question per line using: question | answer (or tab-separated).',
+        variant: 'error',
+      });
+      return;
+    }
+    persistPracticeQuestions([...practiceQuestions, ...imported]);
+    setPracticeBulkText('');
+    showBanner(`Added ${imported.length} practice question(s).`, 'success');
+  };
+
+  const handleDeletePracticeQuestion = (id) => {
+    persistPracticeQuestions(practiceQuestions.filter((q) => q.id !== id));
+  };
+
+  const handleClearPracticeQuestions = () => {
+    persistPracticeQuestions([]);
+    resetPracticeSession();
+    showBanner('Practice question bank cleared.', 'success');
+  };
+
+  const startPracticeSession = () => {
+    if (practiceQuestions.length === 0) return;
+    const shuffled = [...practiceQuestions].sort(() => Math.random() - 0.5);
+    setPracticeQueue(shuffled);
+    setPracticeCursor(0);
+    setPracticeInput('');
+    setPracticeSubmitted(false);
+    setPracticeWasCorrect(false);
+    setPracticeSessionCorrect(0);
+    setPracticeSessionEnded(false);
+    setPracticeSessionActive(true);
+  };
+
+  const resetPracticeSession = () => {
+    setPracticeSessionActive(false);
+    setPracticeSessionEnded(false);
+    setPracticeQueue([]);
+    setPracticeCursor(0);
+    setPracticeInput('');
+    setPracticeSubmitted(false);
+    setPracticeWasCorrect(false);
+    setPracticeSessionCorrect(0);
+  };
+
+  const handlePracticeSubmit = () => {
+    if (practiceSubmitted || !practiceInput.trim()) return;
+    const current = practiceQueue[practiceCursor];
+    if (!current) return;
+    const correct = isSmartMatch(practiceInput, current.answer);
+    setPracticeWasCorrect(correct);
+    setPracticeSubmitted(true);
+    if (correct) {
+      setPracticeSessionCorrect((prev) => prev + 1);
+    }
+  };
+
+  const handlePracticeNext = () => {
+    if (!practiceSubmitted) return;
+    const nextIndex = practiceCursor + 1;
+    if (nextIndex >= practiceQueue.length) {
+      setPracticeSessionEnded(true);
+      setPracticeSessionActive(false);
+      return;
+    }
+    setPracticeCursor(nextIndex);
+    setPracticeInput('');
+    setPracticeSubmitted(false);
+    setPracticeWasCorrect(false);
+  };
+
+  const currentPracticeQuestion = practiceQueue[practiceCursor];
+  const practiceProgressPct = practiceQueue.length > 0
+    ? Math.round(((practiceCursor + (practiceSubmitted ? 1 : 0)) / practiceQueue.length) * 100)
+    : 0;
 
   const feedContainerRef = useRef(null);
 
@@ -1625,23 +1851,20 @@ export default function App() {
       sentences: formattedSentences
     };
 
+    const storyKey = getStoryProgressKey(mockStory);
     setActiveStory(mockStory);
     setStoryStarted(true);
-    setCurrentSentenceIndex(0);
-    setStoryFeed([]);
+    applyStoryProgress(storyKey, mockStory.sentences.length);
     setStoryTranslationInput("");
-    setShowStoryEnd(false);
-    setApiWarningTranslate(false);
   };
 
   const startPresetStory = (idx) => {
-    setActiveStory(cloudStories[idx]);
-    setCurrentSentenceIndex(0);
-    setCurrentSentenceIndex(0);
-    setStoryFeed([]);
+    const nextStory = cloudStories[idx];
+    const storyKey = getStoryProgressKey(nextStory);
+    setActiveStory(nextStory);
+    setStoryStarted(true);
+    applyStoryProgress(storyKey, nextStory?.sentences?.length || 0);
     setStoryTranslationInput("");
-    setShowStoryEnd(false);
-    setApiWarningTranslate(false);
   };
 
   const handlePublishGlobalStory = async () => {
@@ -1727,102 +1950,42 @@ export default function App() {
 
     const sentenceObj = activeStory.sentences[currentSentenceIndex];
     setGradingLoading(true);
-    setApiWarningTranslate(false);
 
-    let parsedGrade = null;
-
-    if (apiKey.trim()) {
-      // 1. GEMINI GRADE METHOD
-      try {
-        const promptText = `You are a Spanish language teacher grading a student's translation. The original Spanish sentence is: '${sentenceObj.text}'. The student translated it as: '${storyTranslationInput.trim()}'. Grade the translation on a scale of 1-5 where 5 is perfect. Respond ONLY in this exact JSON format with no markdown:\n{\n  "score": number,\n  "what_was_right": "string",\n  "what_was_off": "string",\n  "suggested_translation": "string"\n}`;
-        
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey.trim()}`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              contents: [
-                {
-                  parts: [
-                    {
-                      text: promptText,
-                    },
-                  ],
-                },
-              ],
-            }),
-          }
-        );
-
-        if (!response.ok) throw new Error("Gemini API request failed.");
-
-        const data = await response.json();
-        const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-        
-        const cleanJSON = rawText
-          .replace(/```json/gi, "")
-          .replace(/```/g, "")
-          .trim();
-
-        parsedGrade = JSON.parse(cleanJSON);
-      } catch (err) {
-        console.error("Gemini API failed, falling back to Google Translate:", err);
-        setApiWarningTranslate(true);
-        
-        // Dynamic Google Translate Fallback
-        const googleTranslation = await translateWithGoogle(sentenceObj.text);
-        parsedGrade = gradeTranslationSemantic(
-          storyTranslationInput,
-          googleTranslation || sentenceObj.translation
-        );
-      }
-    } else {
-      // 2. KEYLESS GOOGLE TRANSLATE FALLBACK
-      setApiWarningTranslate(true);
-      const googleTranslation = await translateWithGoogle(sentenceObj.text);
-      parsedGrade = gradeTranslationSemantic(
-        storyTranslationInput,
-        googleTranslation || sentenceObj.translation
-      );
-    }
+    const googleTranslation = await translateWithGoogle(sentenceObj.text);
+    const trimmedUser = storyTranslationInput.trim();
 
     setGradingLoading(false);
 
-    if (parsedGrade) {
-      const feedItem = {
-        index: currentSentenceIndex,
-        spanish: sentenceObj.text,
-        userTrans: storyTranslationInput,
-        aiGrade: parsedGrade
-      };
+    const feedItem = {
+      index: currentSentenceIndex,
+      spanish: sentenceObj.text,
+      userTrans: trimmedUser,
+      googleTrans: googleTranslation || "",
+    };
 
-      setStoryFeed(prev => [...prev, feedItem]);
-      setStoryTranslationInput("");
+    setStoryFeed((prev) => [...prev, feedItem]);
+    setStoryTranslationInput("");
 
-      // Log to Supabase Cloud
-      if (supabaseClient) {
-        try {
-          await supabaseClient.from('translation_history').insert({
-            story_title: activeStory.title,
-            sentence_index: currentSentenceIndex,
-            spanish_text: sentenceObj.text,
-            user_translation: storyTranslationInput.trim(),
-            score: parsedGrade.score,
-            feedback: parsedGrade
-          });
-        } catch (err) {
-          console.error("Error saving history to Supabase:", err);
-        }
+    // Log to Supabase Cloud (no grading/feedback — just comparison)
+    if (supabaseClient) {
+      try {
+        await supabaseClient.from('translation_history').insert({
+          story_title: activeStory.title,
+          sentence_index: currentSentenceIndex,
+          spanish_text: sentenceObj.text,
+          user_translation: trimmedUser,
+          score: null,
+          feedback: { google_translate: googleTranslation || null },
+        });
+      } catch (err) {
+        console.error("Error saving history to Supabase:", err);
       }
+    }
 
-      if (currentSentenceIndex + 1 >= activeStory.sentences.length) {
-        setShowStoryEnd(true);
-      } else {
-        setCurrentSentenceIndex(prev => prev + 1);
-      }
+    if (currentSentenceIndex + 1 >= activeStory.sentences.length) {
+      setShowStoryEnd(true);
+    } else {
+      setCurrentSentenceIndex((prev) => prev + 1);
     }
   };
 
@@ -1839,14 +2002,38 @@ export default function App() {
     setStoryFeed([]);
     setStoryTranslationInput("");
     setShowStoryEnd(false);
-    setApiWarningTranslate(false);
   };
 
-  const getAverageStoryScore = () => {
-    if (storyFeed.length === 0) return 0;
-    const total = storyFeed.reduce((sum, item) => sum + item.aiGrade.score, 0);
-    return (total / storyFeed.length).toFixed(1);
+  const getStoryProgress = () => {
+    const total = activeStory?.sentences?.length || 0;
+    const completed = storyFeed.length;
+    const pct = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+    return { total, completed, pct };
   };
+
+  useEffect(() => {
+    if (!session || !storyStarted || !activeStory) return;
+    const storyKey = getStoryProgressKey(activeStory);
+    if (!storyKey || !activeStory.sentences?.length) return;
+
+    if (storyProgressSaveTimerRef.current) {
+      clearTimeout(storyProgressSaveTimerRef.current);
+    }
+    storyProgressSaveTimerRef.current = setTimeout(() => {
+      saveProgressForStory(storyKey, activeStory.sentences.length);
+    }, 900);
+
+    return () => {
+      if (storyProgressSaveTimerRef.current) clearTimeout(storyProgressSaveTimerRef.current);
+    };
+  }, [
+    session?.user?.id,
+    storyStarted,
+    activeStory,
+    currentSentenceIndex,
+    storyFeed,
+    showStoryEnd,
+  ]);
 
   // SQL scaffolding script text
   const SQL_SCRIPTS = `-- See supabase/migrations/001_classes_and_profiles.sql for the full schema,
@@ -1953,6 +2140,12 @@ export default function App() {
               Learn
             </button>
             <button 
+              className={`nav-tab ${activeTab === 'practice' ? 'active' : ''}`}
+              onClick={() => setActiveTab("practice")}
+            >
+              Practice
+            </button>
+            <button 
               className={`nav-tab ${activeTab === 'story' ? 'active' : ''}`}
               onClick={() => setActiveTab("story")}
             >
@@ -2012,12 +2205,11 @@ export default function App() {
           </div>
         )}
         
-        {/* Supabase connection indicator banner (For Flashcards / Learn) */}
+        {/* Connection indicator banner */}
         {activeTab !== 'settings' && dbConnected && (
           <div className="sync-bar">
             <span className="sync-text">
-              <CloudIcon className="icon-svg-sm" /> Connected to Supabase Cloud
-              {isInClass && activeClass ? ` · ${activeClass.name}` : ''}
+              <CloudIcon className="icon-svg-sm" /> Connected to {activeClass?.name || DEFAULT_CLASS_NAME}
             </span>
             <div className="d-flex gap-2">
               <button 
@@ -2068,11 +2260,9 @@ export default function App() {
                       <span className="custom-badge">
                         Card {flashcardIndex + 1} of {activeDeck.length}
                       </span>
-                      {session && (
-                        <span className="custom-badge" style={{ fontSize: '0.65rem', fontWeight: 600 }}>
-                          Progress saves automatically
-                        </span>
-                      )}
+                      <span className="custom-badge" style={{ fontSize: '0.65rem', fontWeight: 600 }}>
+                        {session ? 'Progress auto-saves' : 'Sign in to save progress'}
+                      </span>
                       <div className="d-flex gap-2">
                         {knownCardIds.has(currentFlashcard.id) && (
                           <span className="custom-badge custom-badge-green">Mastered</span>
@@ -2087,9 +2277,12 @@ export default function App() {
                       <div className="progress-bar-bg">
                         <div 
                           className="progress-bar-fill"
-                          style={{ width: `${((flashcardIndex + 1) / activeDeck.length) * 100}%` }}
+                          style={{ width: `${activeDeck.length > 0 ? (knownCardIds.size / activeDeck.length) * 100 : 0}%` }}
                         ></div>
                       </div>
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-light)', fontWeight: 600, marginTop: '0.35rem' }}>
+                      Deck completion: {activeDeck.length > 0 ? Math.round((knownCardIds.size / activeDeck.length) * 100) : 0}% ({knownCardIds.size}/{activeDeck.length} mastered)
                     </div>
                   </div>
 
@@ -2470,7 +2663,7 @@ export default function App() {
                       Progress: {learnState.totalQuestionsCount - learnState.questionQueue.length} / {learnState.totalQuestionsCount}
                     </span>
                     <span style={{ fontSize: '0.75rem', color: 'var(--text-light)', fontWeight: 600 }}>
-                      Remaining: {learnState.questionQueue.length}
+                      {session ? 'Progress auto-saves' : `Remaining: ${learnState.questionQueue.length}`}
                     </span>
                   </div>
 
@@ -2481,6 +2674,9 @@ export default function App() {
                         style={{ width: `${((learnState.totalQuestionsCount - learnState.questionQueue.length) / learnState.totalQuestionsCount) * 100}%` }}
                       ></div>
                     </div>
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-light)', fontWeight: 600, marginTop: '0.35rem' }}>
+                    Session completion: {learnState.totalQuestionsCount > 0 ? Math.round(((learnState.totalQuestionsCount - learnState.questionQueue.length) / learnState.totalQuestionsCount) * 100) : 0}%
                   </div>
                 </div>
 
@@ -2718,7 +2914,230 @@ export default function App() {
         )}
 
         {/* ==========================================
-            TAB 3: STORY MODE
+            TAB 3: PRACTICE MODE (past test questions)
+            ========================================== */}
+        {activeTab === 'practice' && (
+          <div className="practice-tab-container">
+            {practiceSessionEnded ? (
+              <div className="card end-screen" style={{ maxWidth: '560px', margin: '0 auto' }}>
+                <div style={{ display: 'inline-flex', width: '3rem', height: '3rem', backgroundColor: 'var(--success-light)', color: 'var(--success-green)', borderRadius: '50%', alignItems: 'center', justifyContent: 'center', marginBottom: '1.25rem' }}>
+                  <CheckIcon className="icon-svg" />
+                </div>
+                <h2 className="card-title">Practice Complete</h2>
+                <p className="card-subtitle">
+                  You answered {practiceSessionCorrect} of {practiceQueue.length} correctly.
+                </p>
+                <div className="button-group mt-4">
+                  <button className="btn btn-secondary" onClick={resetPracticeSession}>
+                    Back to Question Bank
+                  </button>
+                  <button className="btn btn-primary" onClick={startPracticeSession}>
+                    Practice Again
+                  </button>
+                </div>
+              </div>
+            ) : practiceSessionActive && currentPracticeQuestion ? (
+              <div className="card" style={{ maxWidth: '620px', margin: '0 auto', minHeight: '360px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span className="custom-badge">
+                      Question {practiceCursor + 1} of {practiceQueue.length}
+                    </span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-light)', fontWeight: 600 }}>
+                      Saved locally
+                    </span>
+                  </div>
+                  <div className="progress-container">
+                    <div className="progress-bar-bg">
+                      <div className="progress-bar-fill" style={{ width: `${practiceProgressPct}%` }}></div>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-light)', fontWeight: 600, marginTop: '0.35rem' }}>
+                    Session progress: {practiceProgressPct}%
+                  </div>
+                </div>
+
+                <div style={{ margin: '1.25rem 0' }}>
+                  <h3 className="question-prompt" style={{ marginBottom: '1rem' }}>{currentPracticeQuestion.prompt}</h3>
+                  <div className="input-container">
+                    <input
+                      type="text"
+                      className="text-answer-input"
+                      placeholder="Type your answer..."
+                      disabled={practiceSubmitted}
+                      value={practiceInput}
+                      onChange={(e) => setPracticeInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          if (!practiceSubmitted) handlePracticeSubmit();
+                          else handlePracticeNext();
+                        }
+                      }}
+                    />
+                  </div>
+                  {practiceSubmitted && (
+                    <div className={`feedback-overlay ${practiceWasCorrect ? 'correct' : 'incorrect'}`} style={{ marginTop: '1rem' }}>
+                      <div>
+                        <div className="feedback-text-title">
+                          {practiceWasCorrect ? 'Correct' : 'Not quite'}
+                        </div>
+                        <div className="feedback-text-desc">
+                          Correct answer: <strong>{currentPracticeQuestion.answer}</strong>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="button-group" style={{ borderTop: '1px solid var(--border-gray)', paddingTop: '1.15rem' }}>
+                  <button className="btn btn-secondary" onClick={resetPracticeSession}>
+                    Exit
+                  </button>
+                  {!practiceSubmitted ? (
+                    <button
+                      className="btn btn-primary"
+                      disabled={!practiceInput.trim()}
+                      onClick={handlePracticeSubmit}
+                    >
+                      Check Answer
+                    </button>
+                  ) : (
+                    <button className="btn btn-primary" onClick={handlePracticeNext}>
+                      {practiceCursor + 1 >= practiceQueue.length ? 'Finish' : 'Next Question'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="card" style={{ maxWidth: '720px', margin: '0 auto' }}>
+                <h2 className="card-title">Practice</h2>
+                <p className="card-subtitle">
+                  Build a personal bank of questions from previous tests, then run practice sessions anytime.
+                </p>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1rem' }}>
+                  <div className="settings-group" style={{ marginBottom: 0 }}>
+                    <span className="settings-label">Question</span>
+                    <input
+                      type="text"
+                      className="settings-input"
+                      placeholder="e.g. Conjugate estar (yo, present)"
+                      value={practiceDraftPrompt}
+                      onChange={(e) => setPracticeDraftPrompt(e.target.value)}
+                    />
+                  </div>
+                  <div className="settings-group" style={{ marginBottom: 0 }}>
+                    <span className="settings-label">Answer</span>
+                    <input
+                      type="text"
+                      className="settings-input"
+                      placeholder="e.g. estoy"
+                      value={practiceDraftAnswer}
+                      onChange={(e) => setPracticeDraftAnswer(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleAddPracticeQuestion();
+                      }}
+                    />
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  style={{ marginBottom: '1.25rem' }}
+                  disabled={!practiceDraftPrompt.trim() || !practiceDraftAnswer.trim()}
+                  onClick={handleAddPracticeQuestion}
+                >
+                  Add Question
+                </button>
+
+                <div className="settings-group">
+                  <span className="settings-label">Bulk import (one per line)</span>
+                  <textarea
+                    className="settings-input"
+                    rows={4}
+                    placeholder={'Question | Answer\n¿Cómo se dice "book"? | el libro'}
+                    value={practiceBulkText}
+                    onChange={(e) => setPracticeBulkText(e.target.value)}
+                  />
+                  <span style={{ fontSize: '0.7rem', color: 'var(--text-light)' }}>
+                    Use <strong>question | answer</strong> or tab-separated columns. Paste from old quizzes or tests.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ marginBottom: '1.5rem' }}
+                  disabled={!practiceBulkText.trim()}
+                  onClick={handleImportPracticeBulk}
+                >
+                  Import Lines
+                </button>
+
+                <div style={{ borderTop: '1px solid var(--border-gray)', paddingTop: '1.25rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.875rem' }}>
+                    <h3 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--dark-navy)', margin: 0 }}>
+                      Question Bank ({practiceQuestions.length})
+                    </h3>
+                    <div className="d-flex gap-2">
+                      {practiceQuestions.length > 0 && (
+                        <button type="button" className="btn btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={handleClearPracticeQuestions}>
+                          Clear All
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }}
+                        disabled={practiceQuestions.length === 0}
+                        onClick={startPracticeSession}
+                      >
+                        Start Practice
+                      </button>
+                    </div>
+                  </div>
+
+                  {practiceQuestions.length === 0 ? (
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: 0 }}>
+                      No practice questions yet. Add a few from your previous tests to get started.
+                    </p>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem', maxHeight: '320px', overflowY: 'auto' }}>
+                      {practiceQuestions.map((q) => (
+                        <div
+                          key={q.id}
+                          style={{
+                            border: '1px solid var(--border-gray)',
+                            borderRadius: 'var(--radius-md)',
+                            padding: '0.75rem',
+                            backgroundColor: 'var(--light-gray)',
+                          }}
+                        >
+                          <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--dark-navy)', marginBottom: '0.25rem' }}>
+                            {q.prompt}
+                          </div>
+                          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                            Answer: {q.answer}
+                          </div>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            style={{ marginTop: '0.5rem', padding: '0.25rem 0.5rem', fontSize: '0.7rem' }}
+                            onClick={() => handleDeletePracticeQuestion(q.id)}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ==========================================
+            TAB 4: STORY MODE
             ========================================== */}
         {activeTab === 'story' && (
           <div className="story-tab-container">
@@ -2727,7 +3146,7 @@ export default function App() {
               /* 1. Setup / Loading Story Selector */
               <div className="card" style={{ maxWidth: '750px', margin: '0 auto' }}>
                 <h2 className="card-title">Story Mode</h2>
-                <p className="card-subtitle">Translate curated or pasted Spanish texts. Graded sentence-by-sentence using Gemini API, with automatic fallback to Google Translate.</p>
+                <p className="card-subtitle">Translate curated or pasted Spanish texts sentence-by-sentence, then compare your translation to Google Translate.</p>
                 
                 <div className="story-tabs">
                   <button 
@@ -2830,17 +3249,23 @@ export default function App() {
                   >
                     Exit Story
                   </button>
-                  <span className="custom-badge">
-                    Sentence {currentSentenceIndex + 1} of {activeStory.sentences.length}
+                  <span className="custom-badge" style={{ display: 'inline-flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <span>{session ? 'Progress auto-saves' : 'Sign in to save progress'}</span>
+                    <span>·</span>
+                    <span>
+                      {getStoryProgress().pct}% ({getStoryProgress().completed}/{getStoryProgress().total})
+                    </span>
                   </span>
                 </div>
 
-                {apiWarningTranslate && (
-                  <div style={{ backgroundColor: 'var(--primary-light)', border: '1px solid var(--primary-border)', borderRadius: 'var(--radius-md)', padding: '0.625rem 0.875rem', color: '#1E40AF', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.375rem', marginBottom: '0.875rem' }}>
-                    <span>Notice:</span>
-                    <span>No Gemini API key supplied. Translating instantly using <strong>Google Translate</strong> and grading semantic similarity.</span>
+                <div className="progress-container" style={{ marginBottom: '0.875rem' }}>
+                  <div className="progress-bar-bg">
+                    <div
+                      className="progress-bar-fill"
+                      style={{ width: `${getStoryProgress().pct}%` }}
+                    ></div>
                   </div>
-                )}
+                </div>
 
                 <div className="story-split-container">
                   
@@ -2852,12 +3277,9 @@ export default function App() {
                         let className = "story-sentence";
                         
                         const feedItem = storyFeed.find(f => f.index === idx);
-                        if (feedItem) {
-                          const score = feedItem.aiGrade.score;
-                          if (score >= 4) className += " completed-green";
-                          else if (score === 3) className += " completed-yellow";
-                          else className += " completed-red";
-                        }
+                        const completedStyle = feedItem
+                          ? { color: '#1D4ED8', backgroundColor: '#DBEAFE', borderRadius: '0.4rem', padding: '0.05rem 0.2rem' }
+                          : undefined;
                         
                         if (idx === currentSentenceIndex) {
                           className += " active";
@@ -2867,6 +3289,7 @@ export default function App() {
                           <span 
                             key={idx} 
                             className={className}
+                            style={completedStyle}
                           >
                             {sentence.text}{" "}
                           </span>
@@ -2884,26 +3307,29 @@ export default function App() {
                         <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-light)' }}>Translation History</span>
                         <div className="completed-feed" ref={feedContainerRef}>
                           {storyFeed.map((item, idx) => {
-                            const score = item.aiGrade.score;
-                            let scoreClass = "score-red";
-                            if (score >= 4) scoreClass = "score-green";
-                            else if (score === 3) scoreClass = "score-yellow";
-                            
                             return (
-                              <div key={idx} className={`feed-item ${scoreClass}`}>
+                              <div key={idx} className="feed-item" style={{ borderLeft: '3px solid #2563EB', backgroundColor: '#EFF6FF' }}>
                                 <div className="feed-heading">
                                   <span>Sentence {item.index + 1}</span>
-                                  <div className="star-rating-container">
-                                    {[1, 2, 3, 4, 5].map((starVal) => (
-                                      <StarIcon 
-                                        key={starVal} 
-                                        className={`star-vector ${starVal <= score ? 'filled' : ''}`} 
-                                      />
-                                    ))}
-                                  </div>
                                 </div>
                                 <div className="feed-spanish">"{item.spanish}"</div>
-                                <div className="feed-user-trans">"{item.userTrans}"</div>
+                                <div
+                                  style={{
+                                    display: 'grid',
+                                    gridTemplateColumns: '1fr 1fr',
+                                    gap: '0.75rem',
+                                    marginTop: '0.5rem',
+                                  }}
+                                >
+                                  <div style={{ backgroundColor: '#FEF9C3', border: '1px solid #FDE047', borderRadius: 'var(--radius-sm)', padding: '0.5rem' }}>
+                                    <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#854D0E', marginBottom: '0.2rem' }}>YOU WROTE</div>
+                                    <div className="feed-user-trans">"{item.userTrans}"</div>
+                                  </div>
+                                  <div style={{ backgroundColor: 'var(--primary-light)', border: '1px solid var(--primary-border)', borderRadius: 'var(--radius-sm)', padding: '0.5rem' }}>
+                                    <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#1E40AF', marginBottom: '0.2rem' }}>GOOGLE WROTE</div>
+                                    <div className="feed-user-trans" style={{ color: '#1E40AF' }}>"{item.googleTrans}"</div>
+                                  </div>
+                                </div>
                               </div>
                             );
                           })}
@@ -2933,7 +3359,7 @@ export default function App() {
                         
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <span style={{ fontSize: '0.7rem', color: 'var(--text-light)', fontWeight: 500 }}>
-                            Press Enter or click Submit to grade
+                            Press Enter or click Submit to compare
                           </span>
                           <button 
                             className="btn btn-primary"
@@ -2941,7 +3367,7 @@ export default function App() {
                             disabled={!storyTranslationInput.trim() || gradingLoading}
                             onClick={handleStorySentenceSubmit}
                           >
-                            {gradingLoading ? "Grading..." : "Submit"}
+                            {gradingLoading ? "Saving..." : "Submit"}
                           </button>
                         </div>
                       </div>
@@ -2952,42 +3378,8 @@ export default function App() {
                       <div className="card ai-loading-container">
                         <div className="ai-loading-spinner"></div>
                         <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>
-                          Processing translation grading review...
+                          Saving and fetching Google Translate...
                         </span>
-                      </div>
-                    )}
-
-                    {/* Feedback Card of the LAST evaluated item */}
-                    {storyFeed.length > 0 && !gradingLoading && (
-                      <div className="ai-feedback-card">
-                        <div className="ai-feedback-header">
-                          <span className="feedback-section-title">Teacher Feedback (Sentence {storyFeed[storyFeed.length - 1].index + 1})</span>
-                          <div className="star-rating-container">
-                            {[1, 2, 3, 4, 5].map((starVal) => (
-                              <StarIcon 
-                                key={starVal} 
-                                className={`star-vector ${starVal <= storyFeed[storyFeed.length - 1].aiGrade.score ? 'filled' : ''}`} 
-                              />
-                            ))}
-                          </div>
-                        </div>
-
-                        <div>
-                          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--success-text)', textTransform: 'uppercase' }}>What was right:</div>
-                          <div className="feedback-text-content">{storyFeed[storyFeed.length - 1].aiGrade.what_was_right}</div>
-                        </div>
-
-                        <div>
-                          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--error-text)', textTransform: 'uppercase' }}>What was off:</div>
-                          <div className="feedback-text-content">{storyFeed[storyFeed.length - 1].aiGrade.what_was_off}</div>
-                        </div>
-
-                        <div style={{ backgroundColor: 'var(--primary-light)', padding: '0.625rem 0.875rem', borderRadius: 'var(--radius-sm)', borderLeft: '3px solid var(--primary-blue)' }}>
-                          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#1E40AF', textTransform: 'uppercase' }}>Suggested Translation:</div>
-                          <div className="feedback-text-content" style={{ fontStyle: 'italic', color: '#1E40AF', marginTop: '0.125rem' }}>
-                            "{storyFeed[storyFeed.length - 1].aiGrade.suggested_translation}"
-                          </div>
-                        </div>
                       </div>
                     )}
 
@@ -3004,27 +3396,14 @@ export default function App() {
                     <CheckIcon className="icon-svg" />
                   </div>
                   <h2 className="card-title">Story Completed!</h2>
-                  <p className="card-subtitle">Review your translated sentence scores and detailed review feedback.</p>
-                  
-                  <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', backgroundColor: '#F8FAFC', borderRadius: 'var(--radius-md)', padding: '1rem 2rem', border: '1px solid var(--border-gray)', margin: '1.25rem 0' }}>
-                    <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-light)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Average Score</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', marginTop: '0.125rem' }}>
-                      <span style={{ fontSize: '2.25rem', fontWeight: 800, color: 'var(--dark-navy)', letterSpacing: '-0.02em' }}>{getAverageStoryScore()}</span>
-                      <span style={{ display: 'inline-block', color: 'var(--warning-yellow)', fontSize: '1.25rem' }}>★</span>
-                    </div>
-                  </div>
+                  <p className="card-subtitle">Compare your sentences to Google Translate.</p>
                 </div>
 
                 <div style={{ borderTop: '1px solid var(--border-gray)', paddingTop: '1.25rem' }}>
-                  <h3 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--dark-navy)', textTransform: 'uppercase', marginBottom: '1rem', letterSpacing: '0.02em' }}>Full Review</h3>
+                  <h3 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--dark-navy)', textTransform: 'uppercase', marginBottom: '1rem', letterSpacing: '0.02em' }}>Full Comparison</h3>
                   
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
                     {storyFeed.map((item, idx) => {
-                      const score = item.aiGrade.score;
-                      let scoreTextClass = "custom-badge-red";
-                      if (score >= 4) scoreTextClass = "custom-badge-green";
-                      else if (score === 3) scoreTextClass = "custom-badge-yellow";
-
                       return (
                         <div 
                           key={idx}
@@ -3032,37 +3411,20 @@ export default function App() {
                         >
                           <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.625rem', borderBottom: '1px solid #F1F5F9', paddingBottom: '0.5rem' }}>
                             <span style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--dark-navy)' }}>Sentence {idx + 1}</span>
-                            <div className="d-flex gap-2 align-center">
-                              <span className={`custom-badge ${scoreTextClass}`}>Score: {score}/5</span>
-                              <div className="star-rating-container">
-                                {[1, 2, 3, 4, 5].map((starVal) => (
-                                  <StarIcon 
-                                    key={starVal} 
-                                    className={`star-vector ${starVal <= score ? 'filled' : ''}`} 
-                                  />
-                                ))}
-                              </div>
-                            </div>
                           </div>
 
+                          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-light)', marginBottom: '0.375rem' }}>SPANISH TEXT:</div>
+                          <div style={{ fontSize: '0.9rem', fontStyle: 'italic', color: 'var(--dark-navy)', marginBottom: '0.75rem' }}>"{item.spanish}"</div>
+
                           <div className="review-row" style={{ gridTemplateColumns: '1fr 1fr', padding: 0 }}>
-                            <div>
-                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-light)' }}>SPANISH TEXT:</div>
-                              <div style={{ fontSize: '0.85rem', fontStyle: 'italic', color: 'var(--dark-navy)', marginTop: '0.125rem' }}>"{item.spanish}"</div>
-                              
-                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-light)', marginTop: '0.625rem' }}>YOUR TRANSLATION:</div>
-                              <div style={{ fontSize: '0.85rem', color: 'var(--text-main)', marginTop: '0.125rem' }}>"{item.userTrans}"</div>
+                            <div style={{ backgroundColor: '#FEF9C3', border: '1px solid #FDE047', borderRadius: 'var(--radius-sm)', padding: '0.75rem' }}>
+                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#854D0E' }}>YOU WROTE</div>
+                              <div style={{ fontSize: '0.9rem', color: 'var(--text-main)', marginTop: '0.25rem', lineHeight: 1.5 }}>"{item.userTrans}"</div>
                             </div>
-                            
-                            <div style={{ borderLeft: '1px solid var(--border-gray)', paddingLeft: '1.25rem' }}>
-                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--success-text)' }}>What went right:</div>
-                              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.125rem', lineAngle: 1.4 }}>{item.aiGrade.what_was_right}</div>
 
-                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--error-text)', marginTop: '0.375rem' }}>What was off:</div>
-                              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.125rem', lineAngle: 1.4 }}>{item.aiGrade.what_was_off}</div>
-
-                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#1E40AF', marginTop: '0.375rem' }}>Suggested:</div>
-                              <div style={{ fontSize: '0.8rem', fontStyle: 'italic', color: '#1E40AF', marginTop: '0.125rem' }}>"{item.aiGrade.suggested_translation}"</div>
+                            <div style={{ backgroundColor: 'var(--primary-light)', border: '1px solid var(--primary-border)', borderRadius: 'var(--radius-sm)', padding: '0.75rem' }}>
+                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#1E40AF' }}>GOOGLE WROTE</div>
+                              <div style={{ fontSize: '0.9rem', fontStyle: 'italic', color: '#1E40AF', marginTop: '0.25rem', lineHeight: 1.5 }}>"{item.googleTrans}"</div>
                             </div>
                           </div>
 
@@ -3088,31 +3450,42 @@ export default function App() {
         )}
 
         {/* ==========================================
-            TAB 4: SETTINGS PANEL
+            TAB 5: SETTINGS PANEL
             ========================================== */}
         {activeTab === 'settings' && (
           <div className="settings-tab-container" style={{ maxWidth: '640px', margin: '0 auto' }}>
             <div className="card">
               <h2 className="card-title">Settings</h2>
-              <p className="card-subtitle">Configure your preferences and AI integration for Story Mode.</p>
+              <p className="card-subtitle">Manage appearance and class enrollment.</p>
               
-              {/* Part 1: Gemini Config */}
               <div style={{ marginBottom: '2rem', borderBottom: '1px solid var(--border-gray)', paddingBottom: '1.5rem' }}>
-                <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--dark-navy)', marginBottom: '0.875rem' }}>Gemini API Integration</h3>
-                
-                <div className="settings-group">
-                  <span className="settings-label">Gemini API Key</span>
-                  <input 
-                    type="password"
-                    className="settings-input"
-                    placeholder="Enter your Gemini API key (e.g. AIzaSy...)"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
+                <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--dark-navy)', marginBottom: '0.875rem' }}>Appearance</h3>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '1rem',
+                    padding: '0.75rem 1rem',
+                    border: '1px solid var(--border-gray)',
+                    borderRadius: 'var(--radius-md)',
+                    backgroundColor: 'var(--light-gray)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--dark-navy)' }}>Dark mode</div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.125rem' }}>
+                      Use a darker theme across the app.
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={darkMode}
+                    onChange={(e) => setDarkMode(e.target.checked)}
+                    style={{ width: '1.1rem', height: '1.1rem', cursor: 'pointer' }}
                   />
-                  <span style={{ fontSize: '0.7rem', color: 'var(--text-light)', lineHeight: 1.4 }}>
-                    Stays strictly in your local session React memory. If omitted, Story Mode automatically fallback translates Spanish sentences on the fly using Google Translate.
-                  </span>
-                </div>
+                </label>
               </div>
 
               {/* Class enrollment */}
@@ -3209,7 +3582,7 @@ export default function App() {
       {/* Footer */}
       <footer style={{ backgroundColor: 'var(--white)', borderTop: '1px solid var(--border-gray)', padding: '2rem 1.5rem', textAlign: 'center', marginTop: '4rem' }}>
         <p style={{ fontSize: '0.8rem', color: 'var(--text-light)', fontWeight: 500 }}>
-          Language Learner - Cloud Spanish Tutor. Built with Vite, React, Google APIs, and Supabase.
+          Language Learner - Cloud Spanish Tutor. Built with Vite, React, and Supabase.
         </p>
       </footer>
 
