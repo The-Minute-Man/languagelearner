@@ -24,6 +24,9 @@ WHERE name = 'Spanish 200' AND (slug IS NULL OR slug = '');
 
 CREATE UNIQUE INDEX IF NOT EXISTS classes_slug_key ON public.classes (slug);
 
+-- Class-wide practice question bank (admin writes, students read)
+ALTER TABLE public.classes ADD COLUMN IF NOT EXISTS practice_bank JSONB DEFAULT '{"contexts":[],"questions":[]}'::jsonb;
+
 -- 4) User profiles (class membership)
 CREATE TABLE IF NOT EXISTS public.user_profiles (
   user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -107,6 +110,12 @@ DROP POLICY IF EXISTS "Authenticated users can read classes" ON public.classes;
 CREATE POLICY "Authenticated users can read classes"
   ON public.classes FOR SELECT TO authenticated
   USING (true);
+
+DROP POLICY IF EXISTS "Admin update classes" ON public.classes;
+CREATE POLICY "Admin update classes"
+  ON public.classes FOR UPDATE TO authenticated
+  USING (public.is_content_admin())
+  WITH CHECK (public.is_content_admin());
 
 DROP POLICY IF EXISTS "Users read own profile" ON public.user_profiles;
 CREATE POLICY "Users read own profile"

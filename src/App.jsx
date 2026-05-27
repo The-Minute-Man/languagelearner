@@ -42,36 +42,200 @@ const saveLocalProfile = (userId, profile) => {
 
 const studyProgressStorageKey = (userId) => `languagelearner_study_progress_${userId}`;
 
-const practiceQuestionsStorageKey = (userId) =>
-  userId ? `languagelearner_practice_questions_${userId}` : 'languagelearner_practice_questions_guest';
-
 const darkModeStorageKey = 'languagelearner_dark_mode';
 
 const makePracticeId = () => `pq-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-const parsePracticeBulkText = (text) => {
-  return String(text || '')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      let prompt = '';
-      let answer = '';
-      if (line.includes('|')) {
-        const idx = line.indexOf('|');
-        prompt = line.slice(0, idx).trim();
-        answer = line.slice(idx + 1).trim();
-      } else if (line.includes('\t')) {
-        const idx = line.indexOf('\t');
-        prompt = line.slice(0, idx).trim();
-        answer = line.slice(idx + 1).trim();
-      } else {
-        return null;
+const emptyPracticeBank = () => ({ contexts: [], questions: [] });
+
+const emptyPracticeSetsRoot = () => ({ sets: [] });
+
+const PRACTICE_SYNTAX_HELP = `# Comments start with #
+# Shared context (multi-line until blank line or next directive)
+@context exam1
+Read the passage once. Maria va al mercado cada sábado.
+
+# Normal question (standalone)
+Q: Translate "hola" | hello
+
+# Context question (reuses @exam1 — passage shown automatically)
+@exam1 Q: Where does Maria go? | al mercado
+
+# Legacy one-liners still work:
+¿Cómo se dice "book"? | el libro`;
+
+const normalizePracticeBank = (raw) => {
+  if (!raw) return emptyPracticeBank();
+  if (Array.isArray(raw)) {
+    return {
+      contexts: [],
+      questions: raw.map((q) => ({
+        id: q.id || makePracticeId(),
+        type: q.type === 'context' ? 'context' : 'normal',
+        prompt: q.prompt || '',
+        answer: q.answer || '',
+        contextRef: q.contextRef || undefined,
+      })),
+    };
+  }
+  return {
+    contexts: Array.isArray(raw.contexts) ? raw.contexts : [],
+    questions: Array.isArray(raw.questions) ? raw.questions : [],
+  };
+};
+
+const normalizePracticeSet = (set) => {
+  const bank = normalizePracticeBank(set);
+  return {
+    id: set?.id || makePracticeId(),
+    title: set?.title?.trim() || 'Untitled Practice',
+    description: set?.description?.trim() || '',
+    contexts: bank.contexts,
+    questions: bank.questions,
+    updatedAt: set?.updatedAt || new Date().toISOString(),
+  };
+};
+
+const normalizePracticeSetsRoot = (raw) => {
+  if (!raw) return emptyPracticeSetsRoot();
+  if (Array.isArray(raw)) {
+    return { sets: raw.map((item) => normalizePracticeSet(item)) };
+  }
+  if (Array.isArray(raw.sets)) {
+    return { sets: raw.sets.map((item) => normalizePracticeSet(item)) };
+  }
+  if (raw.contexts || raw.questions) {
+    const legacy = normalizePracticeBank(raw);
+    if (legacy.contexts.length === 0 && legacy.questions.length === 0) {
+      return emptyPracticeSetsRoot();
+    }
+    return {
+      sets: [
+        normalizePracticeSet({
+          id: makePracticeId(),
+          title: 'Practice Set 1',
+          description: '',
+          ...legacy,
+        }),
+      ],
+    };
+  }
+  return emptyPracticeSetsRoot();
+};
+
+const parsePromptAnswerLine = (line) => {
+  let prompt = '';
+  let answer = '';
+  if (line.includes('|')) {
+    const idx = line.indexOf('|');
+    prompt = line.slice(0, idx).trim();
+    answer = line.slice(idx + 1).trim();
+  } else if (line.includes('\t')) {
+    const idx = line.indexOf('\t');
+    prompt = line.slice(0, idx).trim();
+    answer = line.slice(idx + 1).trim();
+  } else {
+    return null;
+  }
+  if (!prompt || !answer) return null;
+  return { prompt, answer };
+};
+
+const parsePracticeSyntax = (text) => {
+  const result = emptyPracticeBank();
+  const contextByRef = new Map();
+  const lines = String(text || '').split('\n');
+  let i = 0;
+
+  const upsertContext = (ref, body) => {
+    const trimmedBody = body.trim();
+    if (!ref || !trimmedBody) return;
+    const existing = contextByRef.get(ref);
+    if (existing) {
+      existing.body = trimmedBody;
+      return;
+    }
+    const ctx = { id: makePracticeId(), ref, body: trimmedBody };
+    contextByRef.set(ref, ctx);
+    result.contexts.push(ctx);
+  };
+
+  while (i < lines.length) {
+    const rawLine = lines[i];
+    const line = rawLine.trim();
+    i += 1;
+    if (!line || line.startsWith('#')) continue;
+
+    const contextMatch = line.match(/^@context\s+([a-zA-Z0-9_-]+)\s*$/i);
+    if (contextMatch) {
+      const ref = contextMatch[1];
+      const bodyLines = [];
+      while (i < lines.length) {
+        const nextRaw = lines[i];
+        const next = nextRaw.trim();
+        if (!next) {
+          i += 1;
+          break;
+        }
+        if (/^@context\s+/i.test(next) || /^@?[a-zA-Z0-9_-]+\s+Q:/i.test(next) || /^Q:/i.test(next)) {
+          break;
+        }
+        bodyLines.push(nextRaw);
+        i += 1;
       }
-      if (!prompt || !answer) return null;
-      return { id: makePracticeId(), prompt, answer };
-    })
-    .filter(Boolean);
+      upsertContext(ref, bodyLines.join('\n'));
+      continue;
+    }
+
+    let contextRef = null;
+    let questionLine = line;
+    const contextQuestionMatch = line.match(/^@([a-zA-Z0-9_-]+)\s+(.+)$/i);
+    if (contextQuestionMatch) {
+      contextRef = contextQuestionMatch[1];
+      questionLine = contextQuestionMatch[2].trim();
+    }
+
+    if (/^Q:/i.test(questionLine)) {
+      questionLine = questionLine.replace(/^Q:\s*/i, '').trim();
+    }
+
+    const parsed = parsePromptAnswerLine(questionLine);
+    if (!parsed) continue;
+
+    result.questions.push({
+      id: makePracticeId(),
+      type: contextRef ? 'context' : 'normal',
+      prompt: parsed.prompt,
+      answer: parsed.answer,
+      ...(contextRef ? { contextRef } : {}),
+    });
+  }
+
+  return result;
+};
+
+const getPracticeContextBody = (bank, contextRef) => {
+  if (!contextRef) return '';
+  return bank.contexts.find((c) => c.ref === contextRef)?.body || '';
+};
+
+const mergePracticeBanks = (base, incoming) => {
+  const merged = {
+    contexts: [...base.contexts],
+    questions: [...base.questions],
+  };
+  const refIndex = new Map(merged.contexts.map((c) => [c.ref, c]));
+  for (const ctx of incoming.contexts) {
+    const existing = refIndex.get(ctx.ref);
+    if (existing) {
+      existing.body = ctx.body;
+    } else {
+      merged.contexts.push(ctx);
+      refIndex.set(ctx.ref, ctx);
+    }
+  }
+  merged.questions.push(...incoming.questions);
+  return merged;
 };
 
 const matchingCardKey = (card) => `${card.id}|${card.side}`;
@@ -1477,6 +1641,7 @@ export default function App() {
   };
 
   const confirmImportDeck = () => {
+    if (!isAdmin) return;
     if (csvPreviewCards.length > 0) {
       setActiveCloudDeckId(null);
       setCustomDeck(csvPreviewCards);
@@ -1683,9 +1848,16 @@ export default function App() {
   // ==========================================
   // PART 4: PRACTICE MODE (past test questions)
   // ==========================================
-  const [practiceQuestions, setPracticeQuestions] = useState([]);
+  const [practiceSets, setPracticeSets] = useState([]);
+  const [activePracticeSetId, setActivePracticeSetId] = useState(null);
+  const [selectedPracticeSetIndex, setSelectedPracticeSetIndex] = useState(0);
+  const [sessionPracticeBank, setSessionPracticeBank] = useState(emptyPracticeBank);
+  const [practiceDraftType, setPracticeDraftType] = useState('normal');
   const [practiceDraftPrompt, setPracticeDraftPrompt] = useState('');
   const [practiceDraftAnswer, setPracticeDraftAnswer] = useState('');
+  const [practiceDraftContextRef, setPracticeDraftContextRef] = useState('');
+  const [practiceContextRef, setPracticeContextRef] = useState('');
+  const [practiceContextBody, setPracticeContextBody] = useState('');
   const [practiceBulkText, setPracticeBulkText] = useState('');
   const [practiceSessionActive, setPracticeSessionActive] = useState(false);
   const [practiceSessionEnded, setPracticeSessionEnded] = useState(false);
@@ -1696,79 +1868,238 @@ export default function App() {
   const [practiceWasCorrect, setPracticeWasCorrect] = useState(false);
   const [practiceSessionCorrect, setPracticeSessionCorrect] = useState(0);
 
-  useEffect(() => {
-    const key = practiceQuestionsStorageKey(session?.user?.id);
+  const activePracticeSet = practiceSets.find((s) => s.id === activePracticeSetId) || null;
+  const practiceBank = activePracticeSet
+    ? { contexts: activePracticeSet.contexts, questions: activePracticeSet.questions }
+    : emptyPracticeBank();
+
+  const fetchClassPracticeSets = async () => {
+    if (!supabaseClient || !activeClassId) {
+      setPracticeSets([]);
+      setActivePracticeSetId(null);
+      return;
+    }
     try {
-      const raw = localStorage.getItem(key);
-      setPracticeQuestions(raw ? JSON.parse(raw) : []);
-    } catch {
-      setPracticeQuestions([]);
+      const { data, error } = await supabaseClient
+        .from('classes')
+        .select('practice_bank')
+        .eq('id', activeClassId)
+        .single();
+      if (error) throw error;
+      const root = normalizePracticeSetsRoot(data?.practice_bank);
+      setPracticeSets(root.sets);
+      if (activePracticeSetId && !root.sets.some((s) => s.id === activePracticeSetId)) {
+        setActivePracticeSetId(null);
+      }
+    } catch (err) {
+      console.error('Fetch class practice sets:', err);
+      setPracticeSets([]);
+      setActivePracticeSetId(null);
     }
     setPracticeSessionActive(false);
     setPracticeSessionEnded(false);
     setPracticeQueue([]);
     setPracticeCursor(0);
-  }, [session?.user?.id]);
+    setSessionPracticeBank(emptyPracticeBank());
+  };
 
   useEffect(() => {
-    const key = practiceQuestionsStorageKey(session?.user?.id);
-    try {
-      localStorage.setItem(key, JSON.stringify(practiceQuestions));
-    } catch {
-      // ignore storage errors
+    if (!session || !dbConnected) {
+      setPracticeSets([]);
+      setActivePracticeSetId(null);
+      return;
     }
-  }, [practiceQuestions, session?.user?.id]);
+    fetchClassPracticeSets();
+  }, [session?.user?.id, activeClassId, dbConnected]);
 
-  const persistPracticeQuestions = (nextQuestions) => {
-    setPracticeQuestions(nextQuestions);
-    const key = practiceQuestionsStorageKey(session?.user?.id);
-    try {
-      localStorage.setItem(key, JSON.stringify(nextQuestions));
-    } catch {
-      // ignore storage errors
+  const persistPracticeSets = async (nextSets) => {
+    if (!isAdmin) return;
+    const sets = nextSets.map((set) => normalizePracticeSet(set));
+    setPracticeSets(sets);
+    if (!supabaseClient || !activeClassId) return;
+    const payload = { sets };
+    const { error } = await supabaseClient
+      .from('classes')
+      .update({ practice_bank: payload })
+      .eq('id', activeClassId);
+    if (error) {
+      console.error('Save class practice sets:', error);
+      showBanner('Could not save practice sets to class.', 'error');
+      return;
     }
+    return sets;
+  };
+
+  const persistActivePracticeSetBank = async (nextBank) => {
+    if (!isAdmin || !activePracticeSetId) return;
+    const normalized = normalizePracticeBank(nextBank);
+    const nextSets = practiceSets.map((set) =>
+      set.id === activePracticeSetId
+        ? { ...set, contexts: normalized.contexts, questions: normalized.questions, updatedAt: new Date().toISOString() }
+        : set
+    );
+    await persistPracticeSets(nextSets);
+  };
+
+  const handleCreatePracticeSet = async () => {
+    if (!isAdmin) return;
+    const values = await showForm({
+      title: 'New practice set',
+      message: 'Create a separate bank for a test, unit, or topic—like a deck or story.',
+      fields: [
+        { id: 'title', label: 'Title', required: true, autoFocus: true, placeholder: 'e.g. Unit 3 Exam Review' },
+        { id: 'description', label: 'Description', multiline: true, rows: 2, placeholder: 'Optional note for students' },
+      ],
+      submitLabel: 'Create set',
+    });
+    if (!values) return;
+    const newSet = normalizePracticeSet({
+      id: makePracticeId(),
+      title: values.title,
+      description: values.description || '',
+      contexts: [],
+      questions: [],
+    });
+    const saved = await persistPracticeSets([...practiceSets, newSet]);
+    const created = saved?.find((s) => s.id === newSet.id) || newSet;
+    setActivePracticeSetId(created.id);
+    showBanner(`Created practice set: ${created.title}`, 'success');
+  };
+
+  const handleDeletePracticeSet = async (setId) => {
+    if (!isAdmin) return;
+    const nextSets = practiceSets.filter((s) => s.id !== setId);
+    await persistPracticeSets(nextSets);
+    if (activePracticeSetId === setId) {
+      setActivePracticeSetId(null);
+    }
+    resetPracticeSession();
+    showBanner('Practice set removed.', 'success');
+  };
+
+  const openPracticeSet = (setId, index) => {
+    setSelectedPracticeSetIndex(index);
+    setActivePracticeSetId(setId);
+    resetPracticeSession();
+  };
+
+  const backToPracticeLibrary = () => {
+    setActivePracticeSetId(null);
+    resetPracticeSession();
+  };
+
+  const handleAddPracticeContext = () => {
+    if (!isAdmin || !activePracticeSetId) return;
+    const ref = practiceContextRef.trim().replace(/\s+/g, '-');
+    const body = practiceContextBody.trim();
+    if (!ref || !body) return;
+    const existing = practiceBank.contexts.find((c) => c.ref === ref);
+    const nextContexts = existing
+      ? practiceBank.contexts.map((c) => (c.ref === ref ? { ...c, body } : c))
+      : [...practiceBank.contexts, { id: makePracticeId(), ref, body }];
+    persistActivePracticeSetBank({ ...practiceBank, contexts: nextContexts });
+    setPracticeContextRef('');
+    setPracticeContextBody('');
+    if (!practiceDraftContextRef) setPracticeDraftContextRef(ref);
+    showBanner(existing ? `Updated context @${ref}.` : `Added context @${ref}.`, 'success');
   };
 
   const handleAddPracticeQuestion = () => {
+    if (!isAdmin || !activePracticeSetId) return;
     const prompt = practiceDraftPrompt.trim();
     const answer = practiceDraftAnswer.trim();
     if (!prompt || !answer) return;
-    persistPracticeQuestions([
-      ...practiceQuestions,
-      { id: makePracticeId(), prompt, answer },
-    ]);
+
+    if (practiceDraftType === 'context') {
+      const contextRef = practiceDraftContextRef.trim();
+      if (!contextRef) {
+        showAlert({
+          title: 'Context required',
+          message: 'Pick or create a context id (e.g. exam1) for context questions.',
+          variant: 'error',
+        });
+        return;
+      }
+      if (!getPracticeContextBody(practiceBank, contextRef)) {
+        showAlert({
+          title: 'Unknown context',
+          message: `No context block named @${contextRef}. Add it under Shared Contexts first.`,
+          variant: 'error',
+        });
+        return;
+      }
+    }
+
+    persistActivePracticeSetBank({
+      ...practiceBank,
+      questions: [
+        ...practiceBank.questions,
+        {
+          id: makePracticeId(),
+          type: practiceDraftType,
+          prompt,
+          answer,
+          ...(practiceDraftType === 'context' ? { contextRef: practiceDraftContextRef.trim() } : {}),
+        },
+      ],
+    });
     setPracticeDraftPrompt('');
     setPracticeDraftAnswer('');
   };
 
   const handleImportPracticeBulk = () => {
-    const imported = parsePracticeBulkText(practiceBulkText);
-    if (imported.length === 0) {
+    if (!isAdmin || !activePracticeSetId) return;
+    const imported = parsePracticeSyntax(practiceBulkText);
+    if (imported.contexts.length === 0 && imported.questions.length === 0) {
       showAlert({
-        title: 'No questions found',
-        message: 'Add one question per line using: question | answer (or tab-separated).',
+        title: 'Nothing to import',
+        message: 'Use the Practice syntax guide below (context blocks + Q: lines).',
         variant: 'error',
       });
       return;
     }
-    persistPracticeQuestions([...practiceQuestions, ...imported]);
+    persistActivePracticeSetBank(mergePracticeBanks(practiceBank, imported));
     setPracticeBulkText('');
-    showBanner(`Added ${imported.length} practice question(s).`, 'success');
+    showBanner(
+      `Imported ${imported.questions.length} question(s) and ${imported.contexts.length} context block(s).`,
+      'success',
+    );
   };
 
   const handleDeletePracticeQuestion = (id) => {
-    persistPracticeQuestions(practiceQuestions.filter((q) => q.id !== id));
+    if (!isAdmin) return;
+    persistActivePracticeSetBank({
+      ...practiceBank,
+      questions: practiceBank.questions.filter((q) => q.id !== id),
+    });
   };
 
-  const handleClearPracticeQuestions = () => {
-    persistPracticeQuestions([]);
+  const handleDeletePracticeContext = (ref) => {
+    if (!isAdmin) return;
+    persistActivePracticeSetBank({
+      contexts: practiceBank.contexts.filter((c) => c.ref !== ref),
+      questions: practiceBank.questions.filter((q) => q.contextRef !== ref),
+    });
+    if (practiceDraftContextRef === ref) setPracticeDraftContextRef('');
+  };
+
+  const handleClearPracticeSet = () => {
+    if (!isAdmin || !activePracticeSetId) return;
+    persistActivePracticeSetBank(emptyPracticeBank());
     resetPracticeSession();
-    showBanner('Practice question bank cleared.', 'success');
+    showBanner('This practice set was cleared.', 'success');
   };
 
   const startPracticeSession = () => {
-    if (practiceQuestions.length === 0) return;
-    const shuffled = [...practiceQuestions].sort(() => Math.random() - 0.5);
+    if (!activePracticeSet) return;
+    const bank = { contexts: activePracticeSet.contexts, questions: activePracticeSet.questions };
+    const runnable = bank.questions.filter((q) => {
+      if (q.type !== 'context') return true;
+      return Boolean(getPracticeContextBody(bank, q.contextRef));
+    });
+    if (runnable.length === 0) return;
+    setSessionPracticeBank(bank);
+    const shuffled = [...runnable].sort(() => Math.random() - 0.5);
     setPracticeQueue(shuffled);
     setPracticeCursor(0);
     setPracticeInput('');
@@ -1817,9 +2148,15 @@ export default function App() {
   };
 
   const currentPracticeQuestion = practiceQueue[practiceCursor];
+  const currentPracticeContextBody =
+    currentPracticeQuestion?.type === 'context'
+      ? getPracticeContextBody(sessionPracticeBank, currentPracticeQuestion.contextRef)
+      : '';
   const practiceProgressPct = practiceQueue.length > 0
     ? Math.round(((practiceCursor + (practiceSubmitted ? 1 : 0)) / practiceQueue.length) * 100)
     : 0;
+  const practiceQuestionCount = activePracticeSet?.questions?.length || 0;
+  const practiceContextCount = activePracticeSet?.contexts?.length || 0;
 
   const feedContainerRef = useRef(null);
 
@@ -1830,6 +2167,7 @@ export default function App() {
   }, [storyFeed]);
 
   const startCustomStory = () => {
+    if (!isAdmin) return;
     if (!customStoryText.trim()) return;
     
     const rawSentences = customStoryText
@@ -2928,8 +3266,8 @@ export default function App() {
                   You answered {practiceSessionCorrect} of {practiceQueue.length} correctly.
                 </p>
                 <div className="button-group mt-4">
-                  <button className="btn btn-secondary" onClick={resetPracticeSession}>
-                    Back to Question Bank
+                  <button className="btn btn-secondary" onClick={backToPracticeLibrary}>
+                    Back to Library
                   </button>
                   <button className="btn btn-primary" onClick={startPracticeSession}>
                     Practice Again
@@ -2958,6 +3296,31 @@ export default function App() {
                 </div>
 
                 <div style={{ margin: '1.25rem 0' }}>
+                  {currentPracticeQuestion.type === 'context' && currentPracticeContextBody && (
+                    <div
+                      style={{
+                        marginBottom: '1rem',
+                        padding: '0.875rem 1rem',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid var(--primary-border)',
+                        backgroundColor: 'var(--primary-light)',
+                        maxHeight: '180px',
+                        overflowY: 'auto',
+                      }}
+                    >
+                      <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#1E40AF', textTransform: 'uppercase', marginBottom: '0.35rem' }}>
+                        Shared context @{currentPracticeQuestion.contextRef}
+                      </div>
+                      <div style={{ fontSize: '0.85rem', color: 'var(--text-main)', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
+                        {currentPracticeContextBody}
+                      </div>
+                    </div>
+                  )}
+                  <div style={{ marginBottom: '0.5rem' }}>
+                    <span className={`custom-badge ${currentPracticeQuestion.type === 'context' ? 'custom-badge-yellow' : ''}`} style={{ fontSize: '0.65rem' }}>
+                      {currentPracticeQuestion.type === 'context' ? 'Context question' : 'Normal question'}
+                    </span>
+                  </div>
                   <h3 className="question-prompt" style={{ marginBottom: '1rem' }}>{currentPracticeQuestion.prompt}</h3>
                   <div className="input-container">
                     <input
@@ -2990,7 +3353,7 @@ export default function App() {
                 </div>
 
                 <div className="button-group" style={{ borderTop: '1px solid var(--border-gray)', paddingTop: '1.15rem' }}>
-                  <button className="btn btn-secondary" onClick={resetPracticeSession}>
+                  <button className="btn btn-secondary" onClick={() => { resetPracticeSession(); }}>
                     Exit
                   </button>
                   {!practiceSubmitted ? (
@@ -3008,60 +3371,234 @@ export default function App() {
                   )}
                 </div>
               </div>
-            ) : (
-              <div className="card" style={{ maxWidth: '720px', margin: '0 auto' }}>
+            ) : !activePracticeSetId ? (
+              <div className="card" style={{ maxWidth: '750px', margin: '0 auto' }}>
                 <h2 className="card-title">Practice</h2>
                 <p className="card-subtitle">
-                  Build a personal bank of questions from previous tests, then run practice sessions anytime.
+                  {isAdmin
+                    ? 'Create separate practice sets for each test or unit—like decks and stories.'
+                    : practiceSets.length > 0
+                      ? 'Choose a practice set to begin.'
+                      : null}
                 </p>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1rem' }}>
-                  <div className="settings-group" style={{ marginBottom: 0 }}>
-                    <span className="settings-label">Question</span>
-                    <input
-                      type="text"
-                      className="settings-input"
-                      placeholder="e.g. Conjugate estar (yo, present)"
-                      value={practiceDraftPrompt}
-                      onChange={(e) => setPracticeDraftPrompt(e.target.value)}
-                    />
+                {!isInClass && (
+                  <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
+                    Join a class in Settings to access practice sets.
+                  </p>
+                )}
+
+                {isAdmin && (
+                  <button
+                    type="button"
+                    className="btn btn-primary w-full"
+                    style={{ marginBottom: '1.25rem' }}
+                    disabled={!isInClass}
+                    onClick={handleCreatePracticeSet}
+                  >
+                    New Practice Set
+                  </button>
+                )}
+
+                {practiceSets.length === 0 ? (
+                  <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: 0 }}>
+                    {isAdmin
+                      ? 'No practice sets yet. Create one for each test or topic.'
+                      : 'No practice questions available yet.'}
+                  </p>
+                ) : (
+                  <div className="story-list">
+                    {practiceSets.map((set, i) => (
+                      <div
+                        key={set.id}
+                        className={`story-select-card ${selectedPracticeSetIndex === i ? 'active' : ''}`}
+                        onClick={() => setSelectedPracticeSetIndex(i)}
+                      >
+                        <h4 className="story-select-title">{set.title}</h4>
+                        {set.description && (
+                          <p className="story-select-desc">{set.description}</p>
+                        )}
+                        <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--primary-blue)', display: 'block', marginTop: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.02em' }}>
+                          {set.questions.length} Questions · {set.contexts.length} Contexts
+                        </span>
+                      </div>
+                    ))}
                   </div>
-                  <div className="settings-group" style={{ marginBottom: 0 }}>
-                    <span className="settings-label">Answer</span>
-                    <input
-                      type="text"
-                      className="settings-input"
-                      placeholder="e.g. estoy"
-                      value={practiceDraftAnswer}
-                      onChange={(e) => setPracticeDraftAnswer(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleAddPracticeQuestion();
-                      }}
-                    />
-                  </div>
-                </div>
+                )}
+
+                {practiceSets.length > 0 && (
+                  <button
+                    type="button"
+                    className="btn btn-primary w-full"
+                    style={{ marginTop: '1rem' }}
+                    disabled={!isInClass || practiceSets.length === 0}
+                    onClick={() => openPracticeSet(practiceSets[selectedPracticeSetIndex].id, selectedPracticeSetIndex)}
+                  >
+                    Open Practice Set
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="card" style={{ maxWidth: '760px', margin: '0 auto' }}>
                 <button
                   type="button"
-                  className="btn btn-primary"
-                  style={{ marginBottom: '1.25rem' }}
-                  disabled={!practiceDraftPrompt.trim() || !practiceDraftAnswer.trim()}
-                  onClick={handleAddPracticeQuestion}
+                  className="btn btn-secondary"
+                  style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem', marginBottom: '1rem' }}
+                  onClick={backToPracticeLibrary}
                 >
-                  Add Question
+                  ← Back to Library
                 </button>
 
+                <h2 className="card-title">{activePracticeSet?.title}</h2>
+                {activePracticeSet?.description && (
+                  <p className="card-subtitle">{activePracticeSet.description}</p>
+                )}
+
+                {isAdmin && (
+                <>
+                <details style={{ marginBottom: '1.25rem', border: '1px solid var(--border-gray)', borderRadius: 'var(--radius-md)', padding: '0.75rem 1rem', backgroundColor: 'var(--light-gray)' }}>
+                  <summary style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--dark-navy)', cursor: 'pointer' }}>
+                    Syntax guide (click to expand)
+                  </summary>
+                  <pre style={{ marginTop: '0.75rem', fontSize: '0.72rem', lineHeight: 1.5, whiteSpace: 'pre-wrap', color: 'var(--text-muted)', fontFamily: 'ui-monospace, monospace' }}>
+                    {PRACTICE_SYNTAX_HELP}
+                  </pre>
+                </details>
+
+                <div style={{ marginBottom: '1.5rem', paddingBottom: '1.25rem', borderBottom: '1px solid var(--border-gray)' }}>
+                  <h3 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--dark-navy)', marginBottom: '0.75rem' }}>Shared contexts</h3>
+                  <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: '0.75rem', marginBottom: '0.75rem' }}>
+                    <div className="settings-group" style={{ marginBottom: 0 }}>
+                      <span className="settings-label">Context id</span>
+                      <input
+                        type="text"
+                        className="settings-input"
+                        placeholder="exam1"
+                        value={practiceContextRef}
+                        onChange={(e) => setPracticeContextRef(e.target.value)}
+                      />
+                    </div>
+                    <div className="settings-group" style={{ marginBottom: 0 }}>
+                      <span className="settings-label">Passage / scenario text</span>
+                      <textarea
+                        className="settings-input"
+                        rows={3}
+                        placeholder="Paste the reading, dialogue, or test scenario once..."
+                        value={practiceContextBody}
+                        onChange={(e) => setPracticeContextBody(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={!practiceContextRef.trim() || !practiceContextBody.trim()}
+                    onClick={handleAddPracticeContext}
+                  >
+                    Save context block
+                  </button>
+                  {practiceBank.contexts.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.875rem' }}>
+                      {practiceBank.contexts.map((ctx) => (
+                        <div key={ctx.id} style={{ border: '1px solid var(--primary-border)', borderRadius: 'var(--radius-sm)', padding: '0.625rem', backgroundColor: 'var(--primary-light)' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', alignItems: 'flex-start' }}>
+                            <span style={{ fontWeight: 700, fontSize: '0.8rem', color: '#1E40AF' }}>@{ctx.ref}</span>
+                            <button type="button" className="btn btn-secondary" style={{ padding: '0.2rem 0.45rem', fontSize: '0.65rem' }} onClick={() => handleDeletePracticeContext(ctx.ref)}>
+                              Delete
+                            </button>
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem', whiteSpace: 'pre-wrap', maxHeight: '4rem', overflow: 'hidden' }}>
+                            {ctx.body}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ marginBottom: '1.25rem' }}>
+                  <h3 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--dark-navy)', marginBottom: '0.75rem' }}>Add question</h3>
+                  <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                    <button
+                      type="button"
+                      className={`btn ${practiceDraftType === 'normal' ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }}
+                      onClick={() => setPracticeDraftType('normal')}
+                    >
+                      Normal
+                    </button>
+                    <button
+                      type="button"
+                      className={`btn ${practiceDraftType === 'context' ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }}
+                      onClick={() => setPracticeDraftType('context')}
+                    >
+                      Context
+                    </button>
+                  </div>
+
+                  {practiceDraftType === 'context' && (
+                    <div className="settings-group">
+                      <span className="settings-label">Use context</span>
+                      <select
+                        className="settings-input"
+                        value={practiceDraftContextRef}
+                        onChange={(e) => setPracticeDraftContextRef(e.target.value)}
+                      >
+                        <option value="">Select context…</option>
+                        {practiceBank.contexts.map((ctx) => (
+                          <option key={ctx.id} value={ctx.ref}>@{ctx.ref}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginTop: '0.75rem' }}>
+                    <div className="settings-group" style={{ marginBottom: 0 }}>
+                      <span className="settings-label">{practiceDraftType === 'context' ? 'Sub-question only' : 'Question'}</span>
+                      <input
+                        type="text"
+                        className="settings-input"
+                        placeholder={practiceDraftType === 'context' ? 'e.g. Where does Maria go?' : 'e.g. Conjugate estar (yo)'}
+                        value={practiceDraftPrompt}
+                        onChange={(e) => setPracticeDraftPrompt(e.target.value)}
+                      />
+                    </div>
+                    <div className="settings-group" style={{ marginBottom: 0 }}>
+                      <span className="settings-label">Answer</span>
+                      <input
+                        type="text"
+                        className="settings-input"
+                        placeholder="e.g. al mercado"
+                        value={practiceDraftAnswer}
+                        onChange={(e) => setPracticeDraftAnswer(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleAddPracticeQuestion();
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    style={{ marginTop: '0.75rem' }}
+                    disabled={!practiceDraftPrompt.trim() || !practiceDraftAnswer.trim()}
+                    onClick={handleAddPracticeQuestion}
+                  >
+                    Add {practiceDraftType === 'context' ? 'context' : 'normal'} question
+                  </button>
+                </div>
+
                 <div className="settings-group">
-                  <span className="settings-label">Bulk import (one per line)</span>
+                  <span className="settings-label">Bulk import (syntax)</span>
                   <textarea
                     className="settings-input"
-                    rows={4}
-                    placeholder={'Question | Answer\n¿Cómo se dice "book"? | el libro'}
+                    rows={6}
+                    placeholder={PRACTICE_SYNTAX_HELP}
                     value={practiceBulkText}
                     onChange={(e) => setPracticeBulkText(e.target.value)}
+                    style={{ fontFamily: 'ui-monospace, monospace', fontSize: '0.8rem' }}
                   />
-                  <span style={{ fontSize: '0.7rem', color: 'var(--text-light)' }}>
-                    Use <strong>question | answer</strong> or tab-separated columns. Paste from old quizzes or tests.
-                  </span>
                 </div>
                 <button
                   type="button"
@@ -3070,25 +3607,37 @@ export default function App() {
                   disabled={!practiceBulkText.trim()}
                   onClick={handleImportPracticeBulk}
                 >
-                  Import Lines
+                  Import with syntax
                 </button>
+                </>
+                )}
 
-                <div style={{ borderTop: '1px solid var(--border-gray)', paddingTop: '1.25rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.875rem' }}>
+                <div style={{ borderTop: isAdmin ? undefined : 'none', paddingTop: '1.25rem', ...(isAdmin ? {} : { marginTop: 0 }) }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.875rem', flexWrap: 'wrap', gap: '0.5rem' }}>
                     <h3 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--dark-navy)', margin: 0 }}>
-                      Question Bank ({practiceQuestions.length})
+                      Questions ({practiceQuestionCount}) · Contexts ({practiceContextCount})
                     </h3>
                     <div className="d-flex gap-2">
-                      {practiceQuestions.length > 0 && (
-                        <button type="button" className="btn btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={handleClearPracticeQuestions}>
-                          Clear All
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }}
+                          onClick={() => handleDeletePracticeSet(activePracticeSetId)}
+                        >
+                          Delete Set
+                        </button>
+                      )}
+                      {isAdmin && practiceQuestionCount > 0 && (
+                        <button type="button" className="btn btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={handleClearPracticeSet}>
+                          Clear Set
                         </button>
                       )}
                       <button
                         type="button"
                         className="btn btn-primary"
                         style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }}
-                        disabled={practiceQuestions.length === 0}
+                        disabled={practiceQuestionCount === 0}
                         onClick={startPracticeSession}
                       >
                         Start Practice
@@ -3096,13 +3645,15 @@ export default function App() {
                     </div>
                   </div>
 
-                  {practiceQuestions.length === 0 ? (
+                  {practiceQuestionCount === 0 ? (
                     <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: 0 }}>
-                      No practice questions yet. Add a few from your previous tests to get started.
+                      {isAdmin
+                        ? 'No questions in this set yet. Add contexts first, then normal or context-linked questions.'
+                        : 'No questions in this practice set yet.'}
                     </p>
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem', maxHeight: '320px', overflowY: 'auto' }}>
-                      {practiceQuestions.map((q) => (
+                      {practiceBank.questions.map((q) => (
                         <div
                           key={q.id}
                           style={{
@@ -3112,20 +3663,25 @@ export default function App() {
                             backgroundColor: 'var(--light-gray)',
                           }}
                         >
+                          <span className={`custom-badge ${q.type === 'context' ? 'custom-badge-yellow' : ''}`} style={{ fontSize: '0.6rem', marginBottom: '0.35rem', display: 'inline-block' }}>
+                            {q.type === 'context' ? `@${q.contextRef}` : 'normal'}
+                          </span>
                           <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--dark-navy)', marginBottom: '0.25rem' }}>
                             {q.prompt}
                           </div>
                           <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                            Answer: {q.answer}
+                            Answer: {isAdmin ? q.answer : '— hidden until you answer'}
                           </div>
-                          <button
-                            type="button"
-                            className="btn btn-secondary"
-                            style={{ marginTop: '0.5rem', padding: '0.25rem 0.5rem', fontSize: '0.7rem' }}
-                            onClick={() => handleDeletePracticeQuestion(q.id)}
-                          >
-                            Remove
-                          </button>
+                          {isAdmin && (
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              style={{ marginTop: '0.5rem', padding: '0.25rem 0.5rem', fontSize: '0.7rem' }}
+                              onClick={() => handleDeletePracticeQuestion(q.id)}
+                            >
+                              Remove
+                            </button>
+                          )}
                         </div>
                       ))}
                     </div>
