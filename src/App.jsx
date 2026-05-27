@@ -5,10 +5,14 @@ import AppDialog from './components/AppDialog.jsx';
 // Auto-initialize Supabase from Vite env vars (VITE_ prefix exposes them to the browser build)
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
-const supabaseAutoClient = (SUPABASE_URL && SUPABASE_ANON_KEY)
+const isValidSupabaseUrl = (url) => {
+  try { return url && new URL(url).protocol.startsWith('http'); }
+  catch { return false; }
+};
+const supabaseAutoClient = isValidSupabaseUrl(SUPABASE_URL) && SUPABASE_ANON_KEY && SUPABASE_ANON_KEY !== 'undefined'
   ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
   : null;
-
+  
 const APP_VERSION = import.meta.env.VITE_APP_VERSION ?? '0.0.0';
 const APP_BUILD_ID = import.meta.env.VITE_BUILD_ID ?? 'dev';
 const APP_DISPLAY_VERSION = `${APP_VERSION}.${APP_BUILD_ID}`;
