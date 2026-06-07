@@ -11,8 +11,9 @@ export default function FlashcardsTab(props) {
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: dbConnected && (isInClass || isAdmin) ? '1fr 340px' : '1fr',
+                gridTemplateColumns: dbConnected && (isInClass || isAdmin) ? '1fr minmax(280px, 360px)' : '1fr',
                 gap: '1.75rem',
+                alignItems: 'start',
               }}
             >
               

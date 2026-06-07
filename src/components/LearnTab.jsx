@@ -3,7 +3,7 @@ import { FolderIcon, UploadIcon, SettingsIcon, StarIcon, CheckIcon, XIcon, Arrow
 
 export default function LearnTab(props) {
   const {
-    activeDeck, answer, cards, completed, correct, dispatchLearn, formatTime, handleMatchingCardClick, handleMcqSelect, handleTfSelect, handleTypeSubmit, isCorrect, isInClass, isMatched, isMismatched, isSelected, isTarget, key, learnState, matched, matchingBoard, matchingCardKey, mcOptions, options, payload, prompt, selected, session, title, type
+    activeDeck, answer, cards, correct, dispatchLearn, formatTime, handleMatchingCardClick, handleMcqSelect, handleTfSelect, handleTypeSubmit, isCorrect, isInClass, isMatched, isMismatched, isSelected, isTarget, key, learnState, matched, matchingBoard, matchingCardKey, mcOptions, options, payload, prompt, selected, session, title, type
   } = props;
 
   return (

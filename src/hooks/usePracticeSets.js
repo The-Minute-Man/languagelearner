@@ -17,11 +17,24 @@ export function usePracticeSets(supabaseClient, session, activeClassId) {
       }
       try {
         const { data, error } = await supabaseClient.from('classes').select('practice_bank').eq('id', activeClassId).single();
-        if (error) throw error;
+        const isMissingPracticeBank = (err) => err?.code === '42703' || err?.code === 42703 || err?.message?.includes('practice_bank');
+        if (error) {
+          if (isMissingPracticeBank(error)) {
+            setPracticeSets([]);
+            setActivePracticeSetId(null);
+            return;
+          }
+          throw error;
+        }
         const root = normalizePracticeSetsRoot(data?.practice_bank);
         setPracticeSets(root.sets);
         if (activePracticeSetId && !root.sets.some((s) => s.id === activePracticeSetId)) setActivePracticeSetId(null);
       } catch (err) {
+        if (err && err.code && (err.code === '42703' || err.code === 42703 || err.message?.includes('practice_bank'))) {
+          setPracticeSets([]);
+          setActivePracticeSetId(null);
+          return;
+        }
         console.error('Fetch class practice sets:', err);
         setPracticeSets([]);
         setActivePracticeSetId(null);
@@ -37,6 +50,9 @@ export function usePracticeSets(supabaseClient, session, activeClassId) {
     const payload = { sets };
     const { error } = await supabaseClient.from('classes').update({ practice_bank: payload }).eq('id', activeClassId);
     if (error) {
+      if (error.code === '42703' || error.message?.includes('practice_bank')) {
+        return sets;
+      }
       console.error('Save class practice sets:', error);
       return null;
     }

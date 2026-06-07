@@ -3,7 +3,7 @@ import { FolderIcon, UploadIcon, SettingsIcon, StarIcon, CheckIcon, XIcon, Arrow
 
 export default function PracticeTab(props) {
   const {
-    PRACTICE_SYNTAX_HELP, activePracticeSet, activePracticeSetId, answer, backToPracticeLibrary, body, contextRef, correct, ctx, currentPracticeContextBody, currentPracticeQuestion, handleAddPracticeContext, handleAddPracticeQuestion, handleClearPracticeSet, handleCreatePracticeSet, handleDeletePracticeContext, handleDeletePracticeQuestion, handleDeletePracticeSet, handleImportPracticeBulk, handlePracticeNext, handlePracticeSubmit, isAdmin, isInClass, key, openPracticeSet, practiceBank, practiceBulkText, practiceContextBody, practiceContextCount, practiceContextRef, practiceCursor, practiceDraftAnswer, practiceDraftContextRef, practiceDraftPrompt, practiceDraftType, practiceInput, practiceProgressPct, practiceQuestionCount, practiceQueue, practiceSessionActive, practiceSessionCorrect, practiceSessionEnded, practiceSets, practiceSubmitted, practiceWasCorrect, prompt, ref, resetPracticeSession, selectedPracticeSetIndex, setPracticeBulkText, setPracticeContextBody, setPracticeContextRef, setPracticeDraftAnswer, setPracticeDraftContextRef, setPracticeDraftPrompt, setPracticeDraftType, setPracticeInput, setSelectedPracticeSetIndex, sets, startPracticeSession, title, type
+    PRACTICE_SYNTAX_HELP, activeDeck, activePracticeSet, activePracticeSetId, answer, backToPracticeLibrary, body, contextRef, correct, ctx, currentPracticeContextBody, currentPracticeQuestion, handleAddPracticeContext, handleAddPracticeQuestion, handleClearPracticeSet, handleCreatePracticeSet, handleDeletePracticeContext, handleDeletePracticeQuestion, handleDeletePracticeSet, handleImportPracticeBulk, handlePracticeNext, handlePracticeSubmit, isAdmin, isInClass, key, openPracticeSet, practiceBank, practiceBulkText, practiceContextBody, practiceContextCount, practiceContextRef, practiceCursor, practiceDraftAnswer, practiceDraftContextRef, practiceDraftPrompt, practiceDraftType, practiceInput, practiceProgressPct, practiceQuestionCount, practiceQueue, practiceSessionActive, practiceSessionCorrect, practiceSessionEnded, practiceSets, practiceSubmitted, practiceWasCorrect, prompt, ref, resetPracticeSession, selectedPracticeSetIndex, setPracticeBulkText, setPracticeContextBody, setPracticeContextRef, setPracticeDraftAnswer, setPracticeDraftContextRef, setPracticeDraftPrompt, setPracticeDraftType, setPracticeInput, setSelectedPracticeSetIndex, sets, startPracticeFromDeck, startPracticeSession, title, type
   } = props;
 
   return (
@@ -153,11 +153,23 @@ export default function PracticeTab(props) {
                 )}
 
                 {practiceSets.length === 0 ? (
-                  <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: 0 }}>
-                    {isAdmin
-                      ? 'No practice sets yet. Create one for each test or topic.'
-                      : 'No practice questions available yet.'}
-                  </p>
+                  <div style={{ display: 'grid', gap: '1rem' }}>
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: 0 }}>
+                      {isAdmin
+                        ? 'No practice sets yet. Create one for each test or topic.'
+                        : 'No practice questions available yet.'}
+                    </p>
+                    {activeDeck?.length > 0 && (
+                      <button
+                        type="button"
+                        className="btn btn-primary w-full"
+                        style={{ marginTop: '0.5rem' }}
+                        onClick={startPracticeFromDeck}
+                      >
+                        Practice Loaded Deck
+                      </button>
+                    )}
+                  </div>
                 ) : (
                   <div className="story-list">
                     {practiceSets.map((set, i) => (

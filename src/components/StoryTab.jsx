@@ -3,7 +3,7 @@ import { FolderIcon, UploadIcon, SettingsIcon, StarIcon, CheckIcon, XIcon, Arrow
 
 export default function StoryTab(props) {
   const {
-    activeStory, answer, cloudStories, completed, completedStyle, created, currentSentenceIndex, customStoryText, feedContainerRef, feedItem, getStoryProgress, gradingLoading, handlePublishGlobalStory, handleStoryKeyPress, handleStorySentenceSubmit, idx, isAdmin, isInClass, key, pasted, pct, ref, resetStoryMode, selectedStoryIndex, sentences, session, setCustomStoryText, setSelectedStoryIndex, setStoryActiveTab, setStoryTranslationInput, showStoryEnd, startCustomStory, startPresetStory, storyActiveTab, storyFeed, storyStarted, storyTranslationInput, tabs, title, total, user
+    activeStory, answer, cloudStories, currentSentenceIndex, customStoryText, feedContainerRef, feedItem, getStoryProgress, gradingLoading, handlePublishGlobalStory, handleStoryKeyPress, handleStorySentenceSubmit, idx, isAdmin, isInClass, key, pasted, ref, resetStoryMode, selectedStoryIndex, sentences, session, setCustomStoryText, setSelectedStoryIndex, setStoryActiveTab, setStoryTranslationInput, showStoryEnd, startCustomStory, startPresetStory, storyActiveTab, storyFeed, storyStarted, storyTranslationInput, tabs, title, user
   } = props;
 
   return (
@@ -22,14 +22,12 @@ export default function StoryTab(props) {
                   >
                     Library Stories
                   </button>
-                  {isAdmin && (
                   <button 
                     className={`story-tab-btn ${storyActiveTab === 'custom' ? 'active' : ''}`}
                     onClick={() => setStoryActiveTab("custom")}
                   >
-                    Publish Story
+                    Custom Story
                   </button>
-                  )}
                 </div>
 
                 {storyActiveTab === 'preset' && (
@@ -65,14 +63,16 @@ export default function StoryTab(props) {
                   </div>
                 )}
 
-                {storyActiveTab === 'custom' && isAdmin && (
+                {storyActiveTab === 'custom' && (
                   <div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem', marginBottom: '1.25rem' }}>
-                      <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--dark-navy)', textTransform: 'uppercase' }}>Enter Spanish Content (Admin)</span>
+                      <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--dark-navy)', textTransform: 'uppercase' }}>
+                        {isAdmin ? 'Enter Spanish Content (Admin)' : 'Practice any Spanish text'}
+                      </span>
                       <textarea 
                         className="text-answer-input"
                         style={{ height: '120px', resize: 'vertical' }}
-                        placeholder="Paste Spanish text to practice locally or publish for the class..."
+                        placeholder="Paste Spanish text to practice locally..."
                         value={customStoryText}
                         onChange={(e) => setCustomStoryText(e.target.value)}
                       />
@@ -86,21 +86,21 @@ export default function StoryTab(props) {
                       Process & Start (Preview)
                     </button>
 
-                    <button 
-                      className="btn btn-primary w-full"
-                      style={{ marginTop: '0.75rem', backgroundColor: '#eab308', borderColor: '#ca8a04', color: 'black' }}
-                      disabled={!customStoryText.trim()}
-                      onClick={handlePublishGlobalStory}
-                    >
-                      Publish Class Story
-                    </button>
+                    {isAdmin ? (
+                      <button 
+                        className="btn btn-primary w-full"
+                        style={{ marginTop: '0.75rem', backgroundColor: '#eab308', borderColor: '#ca8a04', color: 'black' }}
+                        disabled={!customStoryText.trim()}
+                        onClick={handlePublishGlobalStory}
+                      >
+                        Publish Class Story
+                      </button>
+                    ) : (
+                      <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.75rem' }}>
+                        Your pasted story will remain local and private. Teachers can publish shared stories for the class.
+                      </p>
+                    )}
                   </div>
-                )}
-
-                {storyActiveTab === 'custom' && !isAdmin && (
-                  <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                    Custom stories are created by your instructor. Use <strong>Library Stories</strong> to practice class content.
-                  </p>
                 )}
 
               </div>

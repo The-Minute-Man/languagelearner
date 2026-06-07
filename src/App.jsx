@@ -1888,6 +1888,15 @@ export default function App() {
       setActivePracticeSetId(null);
       return;
     }
+
+    const resetPracticeState = () => {
+      setPracticeSessionActive(false);
+      setPracticeSessionEnded(false);
+      setPracticeQueue([]);
+      setPracticeCursor(0);
+      setSessionPracticeBank(emptyPracticeBank());
+    };
+
     try {
       const { data, error } = await supabaseClient
         .from('classes')
@@ -1901,15 +1910,39 @@ export default function App() {
         setActivePracticeSetId(null);
       }
     } catch (err) {
-      console.error('Fetch class practice sets:', err);
+      const isMissingPracticeBankError = err?.code === '42703' || err?.code === 42703 || err?.message?.includes('practice_bank') || err?.status === 400;
+      if (!isMissingPracticeBankError) {
+        console.error('Fetch class practice sets:', err);
+      }
+      if (isMissingPracticeBankError) {
+        try {
+          const { data, error: fallbackError } = await supabaseClient
+            .from('classes')
+            .select('*')
+            .eq('id', activeClassId)
+            .single();
+          if (!fallbackError && data) {
+            const root = normalizePracticeSetsRoot(data.practice_bank ?? data.practiceBank);
+            setPracticeSets(root.sets);
+            if (activePracticeSetId && !root.sets.some((s) => s.id === activePracticeSetId)) {
+              setActivePracticeSetId(null);
+            }
+            return;
+          }
+          if (fallbackError && !isMissingPracticeBankError) {
+            console.error('Fallback fetch class practice sets:', fallbackError);
+          }
+        } catch (fallbackErr) {
+          if (!isMissingPracticeBankError) {
+            console.error('Fallback fetch class practice sets:', fallbackErr);
+          }
+        }
+      }
       setPracticeSets([]);
       setActivePracticeSetId(null);
+    } finally {
+      resetPracticeState();
     }
-    setPracticeSessionActive(false);
-    setPracticeSessionEnded(false);
-    setPracticeQueue([]);
-    setPracticeCursor(0);
-    setSessionPracticeBank(emptyPracticeBank());
   };
 
   useEffect(() => {
@@ -2110,6 +2143,28 @@ export default function App() {
     setSessionPracticeBank(bank);
     const shuffled = [...runnable].sort(() => Math.random() - 0.5);
     setPracticeQueue(shuffled);
+    setPracticeCursor(0);
+    setPracticeInput('');
+    setPracticeSubmitted(false);
+    setPracticeWasCorrect(false);
+    setPracticeSessionCorrect(0);
+    setPracticeSessionEnded(false);
+    setPracticeSessionActive(true);
+  };
+
+  const startPracticeFromDeck = () => {
+    if (!activeDeck || activeDeck.length === 0) return;
+    const bank = {
+      contexts: [],
+      questions: activeDeck.map((card) => ({
+        id: makePracticeId(),
+        type: 'normal',
+        prompt: `Translate "${card.term}"`,
+        answer: card.definition,
+      })),
+    };
+    setSessionPracticeBank(bank);
+    setPracticeQueue(bank.questions);
     setPracticeCursor(0);
     setPracticeInput('');
     setPracticeSubmitted(false);
@@ -2472,15 +2527,34 @@ export default function App() {
 
   // Define missing variables that are passed to tabs
   const answer = "";
+  const body = "";
   const cards = [];
+  const correct = false;
+  const ctx = null;
   const current = null;
   const data = null;
+  const feedItem = null;
+  const idx = 0;
+  const isCorrect = false;
+  const isMatched = false;
+  const isMismatched = false;
+  const isSelected = false;
+  const isTarget = false;
+  const matched = [];
+  const options = [];
+  const payload = null;
+  const prompt = "";
   const queue = [];
   const ref = null;
+  const selected = null;
+  const sentences = [];
+  const tabs = [];
   const n = 0;
   const pasted = false;
   const title = "";
   const type = "";
+  const contextRef = "";
+  const user = session?.user || null;
 
   return (
     <div className="app-layout">
@@ -2624,7 +2698,7 @@ export default function App() {
             ========================================== */}
         {activeTab === 'learn' && (
           <LearnTab
-            activeDeck={activeDeck} answer={answer} cards={cards} completed={completed} correct={correct} dispatchLearn={dispatchLearn} formatTime={formatTime} handleMatchingCardClick={handleMatchingCardClick} handleMcqSelect={handleMcqSelect} handleTfSelect={handleTfSelect} handleTypeSubmit={handleTypeSubmit} isCorrect={isCorrect} isInClass={isInClass} isMatched={isMatched} isMismatched={isMismatched} isSelected={isSelected} isTarget={isTarget} learnState={learnState} matched={matched} matchingBoard={matchingBoard} matchingCardKey={matchingCardKey} mcOptions={mcOptions} options={options} payload={payload} prompt={prompt} selected={selected} session={session} title={title} type={type}
+            activeDeck={activeDeck} answer={answer} cards={cards} correct={correct} dispatchLearn={dispatchLearn} formatTime={formatTime} handleMatchingCardClick={handleMatchingCardClick} handleMcqSelect={handleMcqSelect} handleTfSelect={handleTfSelect} handleTypeSubmit={handleTypeSubmit} isCorrect={isCorrect} isInClass={isInClass} isMatched={isMatched} isMismatched={isMismatched} isSelected={isSelected} isTarget={isTarget} learnState={learnState} matched={matched} matchingBoard={matchingBoard} matchingCardKey={matchingCardKey} mcOptions={mcOptions} options={options} payload={payload} prompt={prompt} selected={selected} session={session} title={title} type={type}
           />
         )}
 
@@ -2633,7 +2707,7 @@ export default function App() {
             ========================================== */}
         {activeTab === 'practice' && (
           <PracticeTab
-            PRACTICE_SYNTAX_HELP={PRACTICE_SYNTAX_HELP} activePracticeSet={activePracticeSet} activePracticeSetId={activePracticeSetId} answer={answer} backToPracticeLibrary={backToPracticeLibrary} body={body} contextRef={contextRef} correct={correct} ctx={ctx} currentPracticeContextBody={currentPracticeContextBody} currentPracticeQuestion={currentPracticeQuestion} handleAddPracticeContext={handleAddPracticeContext} handleAddPracticeQuestion={handleAddPracticeQuestion} handleClearPracticeSet={handleClearPracticeSet} handleCreatePracticeSet={handleCreatePracticeSet} handleDeletePracticeContext={handleDeletePracticeContext} handleDeletePracticeQuestion={handleDeletePracticeQuestion} handleDeletePracticeSet={handleDeletePracticeSet} handleImportPracticeBulk={handleImportPracticeBulk} handlePracticeNext={handlePracticeNext} handlePracticeSubmit={handlePracticeSubmit} isAdmin={isAdmin} isInClass={isInClass} openPracticeSet={openPracticeSet} practiceBank={practiceBank} practiceBulkText={practiceBulkText} practiceContextBody={practiceContextBody} practiceContextCount={practiceContextCount} practiceContextRef={practiceContextRef} practiceCursor={practiceCursor} practiceDraftAnswer={practiceDraftAnswer} practiceDraftContextRef={practiceDraftContextRef} practiceDraftPrompt={practiceDraftPrompt} practiceDraftType={practiceDraftType} practiceInput={practiceInput} practiceProgressPct={practiceProgressPct} practiceQuestionCount={practiceQuestionCount} practiceQueue={practiceQueue} practiceSessionActive={practiceSessionActive} practiceSessionCorrect={practiceSessionCorrect} practiceSessionEnded={practiceSessionEnded} practiceSets={practiceSets} practiceSubmitted={practiceSubmitted} practiceWasCorrect={practiceWasCorrect} prompt={prompt} ref={ref} resetPracticeSession={resetPracticeSession} selectedPracticeSetIndex={selectedPracticeSetIndex} setPracticeBulkText={setPracticeBulkText} setPracticeContextBody={setPracticeContextBody} setPracticeContextRef={setPracticeContextRef} setPracticeDraftAnswer={setPracticeDraftAnswer} setPracticeDraftContextRef={setPracticeDraftContextRef} setPracticeDraftPrompt={setPracticeDraftPrompt} setPracticeDraftType={setPracticeDraftType} setPracticeInput={setPracticeInput} setSelectedPracticeSetIndex={setSelectedPracticeSetIndex} sets={sets} startPracticeSession={startPracticeSession} title={title} type={type}
+            PRACTICE_SYNTAX_HELP={PRACTICE_SYNTAX_HELP} activeDeck={activeDeck} activePracticeSet={activePracticeSet} activePracticeSetId={activePracticeSetId} answer={answer} backToPracticeLibrary={backToPracticeLibrary} body={body} contextRef={contextRef} correct={correct} ctx={ctx} currentPracticeContextBody={currentPracticeContextBody} currentPracticeQuestion={currentPracticeQuestion} handleAddPracticeContext={handleAddPracticeContext} handleAddPracticeQuestion={handleAddPracticeQuestion} handleClearPracticeSet={handleClearPracticeSet} handleCreatePracticeSet={handleCreatePracticeSet} handleDeletePracticeContext={handleDeletePracticeContext} handleDeletePracticeQuestion={handleDeletePracticeQuestion} handleDeletePracticeSet={handleDeletePracticeSet} handleImportPracticeBulk={handleImportPracticeBulk} handlePracticeNext={handlePracticeNext} handlePracticeSubmit={handlePracticeSubmit} isAdmin={isAdmin} isInClass={isInClass} openPracticeSet={openPracticeSet} practiceBank={practiceBank} practiceBulkText={practiceBulkText} practiceContextBody={practiceContextBody} practiceContextCount={practiceContextCount} practiceContextRef={practiceContextRef} practiceCursor={practiceCursor} practiceDraftAnswer={practiceDraftAnswer} practiceDraftContextRef={practiceDraftContextRef} practiceDraftPrompt={practiceDraftPrompt} practiceDraftType={practiceDraftType} practiceInput={practiceInput} practiceProgressPct={practiceProgressPct} practiceQuestionCount={practiceQuestionCount} practiceQueue={practiceQueue} practiceSessionActive={practiceSessionActive} practiceSessionCorrect={practiceSessionCorrect} practiceSessionEnded={practiceSessionEnded} practiceSets={practiceSets} practiceSubmitted={practiceSubmitted} practiceWasCorrect={practiceWasCorrect} prompt={prompt} ref={ref} resetPracticeSession={resetPracticeSession} selectedPracticeSetIndex={selectedPracticeSetIndex} setPracticeBulkText={setPracticeBulkText} setPracticeContextBody={setPracticeContextBody} setPracticeContextRef={setPracticeContextRef} setPracticeDraftAnswer={setPracticeDraftAnswer} setPracticeDraftContextRef={setPracticeDraftContextRef} setPracticeDraftPrompt={setPracticeDraftPrompt} setPracticeDraftType={setPracticeDraftType} setPracticeInput={setPracticeInput} setSelectedPracticeSetIndex={setSelectedPracticeSetIndex} startPracticeFromDeck={startPracticeFromDeck} startPracticeSession={startPracticeSession} title={title} type={type}
           />
         )}
 
@@ -2642,7 +2716,7 @@ export default function App() {
             ========================================== */}
         {activeTab === 'story' && (
           <StoryTab
-            activeStory={activeStory} answer={answer} cloudStories={cloudStories} completed={completed} completedStyle={completedStyle} created={created} currentSentenceIndex={currentSentenceIndex} customStoryText={customStoryText} feedContainerRef={feedContainerRef} feedItem={feedItem} getStoryProgress={getStoryProgress} gradingLoading={gradingLoading} handlePublishGlobalStory={handlePublishGlobalStory} handleStoryKeyPress={handleStoryKeyPress} handleStorySentenceSubmit={handleStorySentenceSubmit} idx={idx} isAdmin={isAdmin} isInClass={isInClass} pasted={pasted} pct={pct} ref={ref} resetStoryMode={resetStoryMode} selectedStoryIndex={selectedStoryIndex} sentences={sentences} session={session} setCustomStoryText={setCustomStoryText} setSelectedStoryIndex={setSelectedStoryIndex} setStoryActiveTab={setStoryActiveTab} setStoryTranslationInput={setStoryTranslationInput} showStoryEnd={showStoryEnd} startCustomStory={startCustomStory} startPresetStory={startPresetStory} storyActiveTab={storyActiveTab} storyFeed={storyFeed} storyStarted={storyStarted} storyTranslationInput={storyTranslationInput} tabs={tabs} title={title} total={total} user={user}
+            activeStory={activeStory} answer={answer} cloudStories={cloudStories} currentSentenceIndex={currentSentenceIndex} customStoryText={customStoryText} feedContainerRef={feedContainerRef} feedItem={feedItem} getStoryProgress={getStoryProgress} gradingLoading={gradingLoading} handlePublishGlobalStory={handlePublishGlobalStory} handleStoryKeyPress={handleStoryKeyPress} handleStorySentenceSubmit={handleStorySentenceSubmit} idx={idx} isAdmin={isAdmin} isInClass={isInClass} pasted={pasted} ref={ref} resetStoryMode={resetStoryMode} selectedStoryIndex={selectedStoryIndex} sentences={sentences} session={session} setCustomStoryText={setCustomStoryText} setSelectedStoryIndex={setSelectedStoryIndex} setStoryActiveTab={setStoryActiveTab} setStoryTranslationInput={setStoryTranslationInput} showStoryEnd={showStoryEnd} startCustomStory={startCustomStory} startPresetStory={startPresetStory} storyActiveTab={storyActiveTab} storyFeed={storyFeed} storyStarted={storyStarted} storyTranslationInput={storyTranslationInput} tabs={tabs} title={title} user={user}
           />
         )}
 
