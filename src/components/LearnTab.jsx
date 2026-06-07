@@ -38,7 +38,7 @@ export default function LearnTab(props) {
             ) : learnState.settingsScreen ? (
               
               /* 1. Learn settings selector */
-              <div className="card" style={{ maxWidth: '600px', margin: '0 auto' }}>
+              <div className="card" style={{ maxWidth: '980px', margin: '0 auto' }}>
                 <h2 className="card-title">Setup Learn Session</h2>
                 <p className="card-subtitle">Toggle the following check cards to customize the session question mix.</p>
                 
@@ -139,7 +139,7 @@ export default function LearnTab(props) {
             ) : learnState.currentQuestion ? (
               
               /* 2. Active Learn interactive panel */
-              <div className="card" style={{ maxWidth: '580px', margin: '0 auto', minHeight: '380px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+              <div className="card" style={{ maxWidth: '980px', margin: '0 auto', minHeight: '380px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
                     <span className="custom-badge">
@@ -355,7 +355,7 @@ export default function LearnTab(props) {
             ) : (
               
               /* 3. Learn session scoreboard results */
-              <div className="card end-screen" style={{ maxWidth: '540px', margin: '0 auto' }}>
+              <div className="card end-screen" style={{ maxWidth: '980px', margin: '0 auto' }}>
                 <div style={{ display: 'inline-flex', width: '3rem', height: '3rem', backgroundColor: 'var(--success-light)', color: 'var(--success-green)', borderRadius: '50%', alignItems: 'center', justifyContent: 'center', marginBottom: '1.25rem' }}>
                   <CheckIcon className="icon-svg" />
                 </div>

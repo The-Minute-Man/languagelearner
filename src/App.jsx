@@ -1916,11 +1916,11 @@ export default function App() {
       if (activeTab === 'flashcards') {
         if (e.key === 'ArrowRight') {
           e.preventDefault();
-          advanceCard();
+          handleTagKnown();
         }
         if (e.key === 'ArrowLeft') {
           e.preventDefault();
-          prevCard();
+          handleTagLearning();
         }
         if (e.key === 'k' || e.key === 'K') {
           e.preventDefault();
@@ -1936,15 +1936,24 @@ export default function App() {
         }
       }
 
-      if (activeTab === 'learn' && learnState.isAnswerSubmitted && e.key === 'Enter') {
-        e.preventDefault();
-        dispatchLearn({ type: 'NEXT_QUESTION' });
+      if (activeTab === 'learn') {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          // If answer already checked, go to next; otherwise submit current answer when applicable
+          if (learnState.isAnswerSubmitted) {
+            dispatchLearn({ type: 'NEXT_QUESTION' });
+          } else {
+            if (learnState.currentQuestion?.type === 'type') {
+              handleTypeSubmit();
+            }
+          }
+        }
       }
     };
 
     window.addEventListener('keydown', handleGlobalKeys);
     return () => window.removeEventListener('keydown', handleGlobalKeys);
-  }, [activeTab, learnState.isAnswerSubmitted, advanceCard, prevCard]);
+  }, [activeTab, learnState.isAnswerSubmitted, handleTagKnown, handleTagLearning, setIsCardFlipped, handleTypeSubmit, learnState.currentQuestion]);
 
   const formatTime = (ms) => {
     if (!ms || ms < 0) return "0:00";

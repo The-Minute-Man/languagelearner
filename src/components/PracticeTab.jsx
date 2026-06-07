@@ -9,7 +9,7 @@ export default function PracticeTab(props) {
   return (
     <div className="practice-tab-container">
             {practiceSessionEnded ? (
-              <div className="card end-screen" style={{ maxWidth: '560px', margin: '0 auto' }}>
+              <div className="card end-screen" style={{ maxWidth: '980px', margin: '0 auto' }}>
                 <div style={{ display: 'inline-flex', width: '3rem', height: '3rem', backgroundColor: 'var(--success-light)', color: 'var(--success-green)', borderRadius: '50%', alignItems: 'center', justifyContent: 'center', marginBottom: '1.25rem' }}>
                   <CheckIcon className="icon-svg" />
                 </div>
@@ -27,7 +27,7 @@ export default function PracticeTab(props) {
                 </div>
               </div>
             ) : practiceSessionActive && currentPracticeQuestion ? (
-              <div className="card" style={{ maxWidth: '620px', margin: '0 auto', minHeight: '360px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+              <div className="card" style={{ maxWidth: '980px', margin: '0 auto', minHeight: '360px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span className="custom-badge">
@@ -124,7 +124,7 @@ export default function PracticeTab(props) {
                 </div>
               </div>
             ) : !activePracticeSetId ? (
-              <div className="card" style={{ maxWidth: '750px', margin: '0 auto' }}>
+              <div className="card" style={{ maxWidth: '980px', margin: '0 auto' }}>
                 <h2 className="card-title">Practice</h2>
                 <p className="card-subtitle">
                   {isAdmin
@@ -203,7 +203,7 @@ export default function PracticeTab(props) {
                 )}
               </div>
             ) : (
-              <div className="card" style={{ maxWidth: '760px', margin: '0 auto' }}>
+              <div className="card" style={{ maxWidth: '980px', margin: '0 auto' }}>
                 <button
                   type="button"
                   className="btn btn-secondary"

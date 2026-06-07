@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { FolderIcon, UploadIcon, SettingsIcon, StarIcon, CheckIcon, XIcon, ArrowRightIcon, ArrowLeftIcon, CloudIcon, CopyIcon } from './Icons';
 
 export default function StoryTab(props) {
@@ -6,6 +6,50 @@ export default function StoryTab(props) {
     activeStory, answer, cloudStories, currentSentenceIndex, customStoryText, feedContainerRef, feedItem, getStoryProgress, gradingLoading, handlePublishGlobalStory, handleStoryKeyPress, handleStorySentenceSubmit, idx, isAdmin, isInClass, key, pasted, ref, resetStoryMode, selectedStoryIndex, sentences, session, setCustomStoryText, setSelectedStoryIndex, setStoryActiveTab, setStoryTranslationInput, showStoryEnd, startCustomStory, startPresetStory, storyActiveTab, storyFeed, storyStarted, storyTranslationInput, tabs, title, user
     , clearStoryProgress
   } = props;
+
+  const [googleDraftTranslation, setGoogleDraftTranslation] = useState("");
+  const [googleDraftLoading, setGoogleDraftLoading] = useState(false);
+  const [selectedWord, setSelectedWord] = useState("");
+  const [selectedWordTranslation, setSelectedWordTranslation] = useState("");
+
+  useEffect(() => {
+    let t = null;
+    const q = (storyTranslationInput || "").trim();
+    if (!q) {
+      setGoogleDraftTranslation("");
+      return;
+    }
+    setGoogleDraftLoading(true);
+    t = setTimeout(async () => {
+      try {
+        const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=es&tl=en&dt=t&q=${encodeURIComponent(q)}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        const translated = Array.isArray(data) && Array.isArray(data[0]) ? data[0].map((p) => p[0]).join('') : '';
+        setGoogleDraftTranslation(translated || '');
+      } catch (err) {
+        setGoogleDraftTranslation('');
+      } finally {
+        setGoogleDraftLoading(false);
+      }
+    }, 400);
+
+    return () => clearTimeout(t);
+  }, [storyTranslationInput]);
+
+  const translateWord = async (word) => {
+    setSelectedWord(word);
+    setSelectedWordTranslation('...');
+    try {
+      const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=es&tl=en&dt=t&q=${encodeURIComponent(word)}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      const translated = Array.isArray(data) && Array.isArray(data[0]) ? data[0].map((p) => p[0]).join('') : '';
+      setSelectedWordTranslation(translated || '');
+    } catch (err) {
+      setSelectedWordTranslation('');
+    }
+  };
 
   return (
     <div className="story-tab-container">
@@ -145,27 +189,36 @@ export default function StoryTab(props) {
                 <div className="story-split-container">
                   
                   {/* Left panel story display */}
-                  <div className="story-left-panel">
+                    <div className="story-left-panel">
                     <h3 className="story-title-display">{activeStory.title}</h3>
                     <div className="story-paragraph">
                       {activeStory.sentences.map((sentence, idx) => {
                         let className = "story-sentence";
-                        
                         const feedItem = storyFeed.find(f => f.index === idx);
                         const completedStyle = feedItem
                           ? { color: '#1D4ED8', backgroundColor: '#DBEAFE', borderRadius: '0.4rem', padding: '0.05rem 0.2rem' }
                           : undefined;
-                        
                         if (idx === currentSentenceIndex) {
                           className += " active";
+                          // render clickable words for active sentence
+                          const words = sentence.text.split(/(\s+)/);
+                          return (
+                            <span key={idx} className={className} style={completedStyle}>
+                              {words.map((w, wi) => {
+                                const isSpace = /^\s+$/.test(w);
+                                if (isSpace) return w;
+                                const clean = w.replace(/[.,;:!?()\"][\s]*$/g, '');
+                                return (
+                                  <span key={wi} onClick={() => translateWord(clean)} style={{ cursor: 'pointer', textDecoration: 'underline', marginRight: '0.15rem' }}>
+                                    {w}
+                                  </span>
+                                );
+                              })}
+                            </span>
+                          );
                         }
-                        
                         return (
-                          <span 
-                            key={idx} 
-                            className={className}
-                            style={completedStyle}
-                          >
+                          <span key={idx} className={className} style={completedStyle}>
                             {sentence.text}{" "}
                           </span>
                         );
@@ -176,47 +229,7 @@ export default function StoryTab(props) {
                   {/* Right panel translation workspace */}
                   <div className="story-right-panel">
                     
-                    {/* Translate logs feed */}
-                    {storyFeed.length > 0 && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
-                        <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-light)' }}>Latest Translation</span>
-                        <div className="completed-feed" ref={feedContainerRef}>
-                          {(() => {
-                            const item = storyFeed[storyFeed.length - 1];
-                            return (
-                              <div key={item.index} className="feed-item" style={{ borderLeft: '3px solid #2563EB', backgroundColor: '#EFF6FF' }}>
-                                <div className="feed-heading">
-                                  <span>Sentence {item.index + 1}</span>
-                                </div>
-                                <div className="feed-spanish">{item.spanish}</div>
-                                <div
-                                  style={{
-                                    display: 'grid',
-                                    gridTemplateColumns: '1fr 1fr',
-                                    gap: '0.75rem',
-                                    marginTop: '0.5rem',
-                                  }}
-                                >
-                                  <div style={{ backgroundColor: '#FEF9C3', border: '1px solid #FDE047', borderRadius: 'var(--radius-sm)', padding: '0.5rem' }}>
-                                    <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#854D0E', marginBottom: '0.2rem' }}>YOU WROTE</div>
-                                    <div className="feed-user-trans">{item.userTrans}</div>
-                                  </div>
-                                  <div style={{ backgroundColor: 'var(--primary-light)', border: '1px solid var(--primary-border)', borderRadius: 'var(--radius-sm)', padding: '0.5rem' }}>
-                                    <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#1E40AF', marginBottom: '0.2rem' }}>GOOGLE WROTE</div>
-                                    <div className="feed-user-trans" style={{ color: '#1E40AF' }}>{item.googleTrans}</div>
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                          })()}
-                        </div>
-                        {storyFeed.length > 1 && (
-                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-                            Showing your most recent translation. Full review is available after completion.
-                          </div>
-                        )}
-                      </div>
-                    )}
+                    {/* (Moved) Translate logs feed will render below the input so the story remains visible */}
 
                     {/* Active Input Panel */}
                     <div className="card" style={{ padding: '1.15rem' }}>
@@ -227,7 +240,7 @@ export default function StoryTab(props) {
                         {activeStory.sentences[currentSentenceIndex].text}
                       </p>
 
-                      <div className="input-container" style={{ marginBottom: 0 }}>
+                        <div className="input-container" style={{ marginBottom: 0 }}>
                         <textarea 
                           className="text-answer-input"
                           style={{ height: '70px', fontSize: '0.85rem' }}
@@ -253,6 +266,46 @@ export default function StoryTab(props) {
                           </button>
                         </div>
                       </div>
+
+                      {/* Live draft comparison shown below the input so the full story stays visible */}
+                      <div style={{ marginTop: '0.75rem' }}>
+                        <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-light)', marginBottom: '0.35rem' }}>Live Comparison</div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                          <div style={{ backgroundColor: '#FEF9C3', border: '1px solid #FDE047', borderRadius: 'var(--radius-sm)', padding: '0.5rem' }}>
+                            <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#854D0E', marginBottom: '0.2rem' }}>YOU ARE TYPING</div>
+                            <div className="feed-user-trans">{storyTranslationInput}</div>
+                          </div>
+                          <div style={{ backgroundColor: 'var(--primary-light)', border: '1px solid var(--primary-border)', borderRadius: 'var(--radius-sm)', padding: '0.5rem' }}>
+                            <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#1E40AF', marginBottom: '0.2rem' }}>GOOGLE DRAFT</div>
+                            <div className="feed-user-trans" style={{ color: '#1E40AF' }}>{googleDraftLoading ? 'Translating…' : googleDraftTranslation}</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Translate logs feed (recent submissions) - moved below live comparison */}
+                      {storyFeed.length > 0 && (
+                        <div style={{ marginTop: '0.75rem' }}>
+                          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-light)' }}>Recent Submissions</span>
+                          <div className="completed-feed" ref={feedContainerRef} style={{ marginTop: '0.5rem' }}>
+                            {storyFeed.slice(-5).map((item) => (
+                              <div key={item.index} className="feed-item" style={{ borderLeft: '3px solid #2563EB', backgroundColor: '#EFF6FF', marginBottom: '0.5rem' }}>
+                                <div className="feed-heading"><span>Sentence {item.index + 1}</span></div>
+                                <div className="feed-spanish">{item.spanish}</div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginTop: '0.5rem' }}>
+                                  <div style={{ backgroundColor: '#FEF9C3', border: '1px solid #FDE047', borderRadius: 'var(--radius-sm)', padding: '0.5rem' }}>
+                                    <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#854D0E', marginBottom: '0.2rem' }}>YOU WROTE</div>
+                                    <div className="feed-user-trans">{item.userTrans}</div>
+                                  </div>
+                                  <div style={{ backgroundColor: 'var(--primary-light)', border: '1px solid var(--primary-border)', borderRadius: 'var(--radius-sm)', padding: '0.5rem' }}>
+                                    <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#1E40AF', marginBottom: '0.2rem' }}>GOOGLE WROTE</div>
+                                    <div className="feed-user-trans" style={{ color: '#1E40AF' }}>{item.googleTrans}</div>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     {/* Loading skeleton */}
