@@ -4,6 +4,7 @@ import { FolderIcon, UploadIcon, SettingsIcon, StarIcon, CheckIcon, XIcon, Arrow
 export default function StoryTab(props) {
   const {
     activeStory, answer, cloudStories, currentSentenceIndex, customStoryText, feedContainerRef, feedItem, getStoryProgress, gradingLoading, handlePublishGlobalStory, handleStoryKeyPress, handleStorySentenceSubmit, idx, isAdmin, isInClass, key, pasted, ref, resetStoryMode, selectedStoryIndex, sentences, session, setCustomStoryText, setSelectedStoryIndex, setStoryActiveTab, setStoryTranslationInput, showStoryEnd, startCustomStory, startPresetStory, storyActiveTab, storyFeed, storyStarted, storyTranslationInput, tabs, title, user
+    , clearStoryProgress
   } = props;
 
   return (
@@ -11,7 +12,7 @@ export default function StoryTab(props) {
             {!storyStarted ? (
               
               /* 1. Setup / Loading Story Selector */
-              <div className="card" style={{ maxWidth: '750px', margin: '0 auto' }}>
+              <div className="card" style={{ maxWidth: '980px', margin: '0 auto' }}>
                 <h2 className="card-title">Story Mode</h2>
                 <p className="card-subtitle">Translate curated or pasted Spanish texts sentence-by-sentence, then compare your translation to Google Translate.</p>
                 
@@ -116,6 +117,13 @@ export default function StoryTab(props) {
                   >
                     Exit Story
                   </button>
+                  <button
+                    className="btn btn-secondary"
+                    style={{ padding: '0.375rem 0.75rem', fontSize: '0.8rem' }}
+                    onClick={clearStoryProgress}
+                  >
+                    Reset Progress
+                  </button>
                   <span className="custom-badge" style={{ display: 'inline-flex', gap: '0.5rem', alignItems: 'center' }}>
                     <span>{session ? 'Progress auto-saves' : 'Sign in to save progress'}</span>
                     <span>·</span>
@@ -171,15 +179,16 @@ export default function StoryTab(props) {
                     {/* Translate logs feed */}
                     {storyFeed.length > 0 && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
-                        <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-light)' }}>Translation History</span>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-light)' }}>Latest Translation</span>
                         <div className="completed-feed" ref={feedContainerRef}>
-                          {storyFeed.map((item, idx) => {
+                          {(() => {
+                            const item = storyFeed[storyFeed.length - 1];
                             return (
-                              <div key={idx} className="feed-item" style={{ borderLeft: '3px solid #2563EB', backgroundColor: '#EFF6FF' }}>
+                              <div key={item.index} className="feed-item" style={{ borderLeft: '3px solid #2563EB', backgroundColor: '#EFF6FF' }}>
                                 <div className="feed-heading">
                                   <span>Sentence {item.index + 1}</span>
                                 </div>
-                                <div className="feed-spanish">"{item.spanish}"</div>
+                                <div className="feed-spanish">{item.spanish}</div>
                                 <div
                                   style={{
                                     display: 'grid',
@@ -190,17 +199,22 @@ export default function StoryTab(props) {
                                 >
                                   <div style={{ backgroundColor: '#FEF9C3', border: '1px solid #FDE047', borderRadius: 'var(--radius-sm)', padding: '0.5rem' }}>
                                     <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#854D0E', marginBottom: '0.2rem' }}>YOU WROTE</div>
-                                    <div className="feed-user-trans">"{item.userTrans}"</div>
+                                    <div className="feed-user-trans">{item.userTrans}</div>
                                   </div>
                                   <div style={{ backgroundColor: 'var(--primary-light)', border: '1px solid var(--primary-border)', borderRadius: 'var(--radius-sm)', padding: '0.5rem' }}>
                                     <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#1E40AF', marginBottom: '0.2rem' }}>GOOGLE WROTE</div>
-                                    <div className="feed-user-trans" style={{ color: '#1E40AF' }}>"{item.googleTrans}"</div>
+                                    <div className="feed-user-trans" style={{ color: '#1E40AF' }}>{item.googleTrans}</div>
                                   </div>
                                 </div>
                               </div>
                             );
-                          })}
+                          })()}
                         </div>
+                        {storyFeed.length > 1 && (
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+                            Showing your most recent translation. Full review is available after completion.
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -210,7 +224,7 @@ export default function StoryTab(props) {
                         Translate Active Sentence
                       </h4>
                       <p style={{ fontStyle: 'italic', fontSize: '0.9rem', color: 'var(--primary-blue)', fontWeight: 600, marginBottom: '0.875rem', lineHeight: 1.4 }}>
-                        "{activeStory.sentences[currentSentenceIndex].text}"
+                        {activeStory.sentences[currentSentenceIndex].text}
                       </p>
 
                       <div className="input-container" style={{ marginBottom: 0 }}>
@@ -222,6 +236,7 @@ export default function StoryTab(props) {
                           value={storyTranslationInput}
                           onChange={(e) => setStoryTranslationInput(e.target.value)}
                           onKeyDown={handleStoryKeyPress}
+                          autoFocus
                         />
                         
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

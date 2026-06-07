@@ -597,19 +597,27 @@ const initialLearnState = {
 function learnReducer(state, action) {
   switch (action.type) {
     case 'START_SESSION': {
-      const { deck, types } = action.payload;
+      const { deck, types, knownIds = [], learningIds = [], familiarIds = [] } = action.payload;
       if (!deck || deck.length === 0) return state;
 
       const activeTypes = Object.keys(types).filter(k => types[k]);
-      
-      const queue = deck.map(card => {
-        const type = activeTypes[Math.floor(Math.random() * activeTypes.length)];
-        return {
+      const statusPriority = (cardId) => {
+        if (learningIds.includes(cardId)) return 0;
+        if (familiarIds.includes(cardId)) return 1;
+        if (knownIds.includes(cardId)) return 3;
+        return 2;
+      };
+
+      const queue = deck
+        .map(card => ({
           card,
-          type,
+          type: activeTypes[Math.floor(Math.random() * activeTypes.length)],
           attempts: 0
-        };
-      });
+        }))
+        .sort((a, b) => {
+          const priority = statusPriority(a.card.id) - statusPriority(b.card.id);
+          return priority !== 0 ? priority : Math.random() - 0.5;
+        });
 
       return {
         ...state,
@@ -1420,6 +1428,7 @@ export default function App() {
   const [isCardFlipped, setIsCardFlipped] = useState(false);
   const [knownCardIds, setKnownCardIds] = useState(new Set());
   const [learningCardIds, setLearningCardIds] = useState(new Set());
+  const [familiarCardIds, setFamiliarCardIds] = useState(new Set());
   const [activeCloudDeckId, setActiveCloudDeckId] = useState(null);
   const progressSaveTimerRef = useRef(null);
   const storyProgressSaveTimerRef = useRef(null);
@@ -1473,11 +1482,13 @@ export default function App() {
     if (!entry) {
       setKnownCardIds(new Set());
       setLearningCardIds(new Set());
+      setFamiliarCardIds(new Set());
       setFlashcardIndex(0);
       return;
     }
     setKnownCardIds(new Set(entry.knownIds || []));
     setLearningCardIds(new Set(entry.learningIds || []));
+    setFamiliarCardIds(new Set(entry.familiarIds || []));
     const idx = entry.flashcardIndex ?? 0;
     setFlashcardIndex(deckLength > 0 ? Math.min(idx, deckLength - 1) : 0);
   };
@@ -1489,6 +1500,7 @@ export default function App() {
     root.decks[deckKey] = {
       knownIds: [...knownCardIds],
       learningIds: [...learningCardIds],
+      familiarIds: [...familiarCardIds],
       flashcardIndex: Math.min(flashcardIndex, Math.max(deckLength - 1, 0)),
       updatedAt: new Date().toISOString(),
     };
@@ -1573,6 +1585,7 @@ export default function App() {
     flashcardIndex,
     knownCardIds,
     learningCardIds,
+    familiarCardIds,
     activeDeck.length,
   ]);
 
@@ -1661,17 +1674,73 @@ export default function App() {
     }
   };
 
+  const getLearnStatusForCard = (cardId) => {
+    if (knownCardIds.has(cardId)) return 'mastered';
+    if (learningCardIds.has(cardId)) return 'learning';
+    if (familiarCardIds.has(cardId)) return 'familiar';
+    return 'new';
+  };
+
+  const updateLearnCardStatus = (cardId, isCorrect) => {
+    if (!cardId) return;
+    const newKnown = new Set(knownCardIds);
+    const newLearning = new Set(learningCardIds);
+    const newFamiliar = new Set(familiarCardIds);
+
+    if (isCorrect) {
+      if (newLearning.has(cardId) || newFamiliar.has(cardId)) {
+        newLearning.delete(cardId);
+        newFamiliar.delete(cardId);
+        newKnown.add(cardId);
+      } else if (!newKnown.has(cardId)) {
+        newFamiliar.add(cardId);
+      }
+    } else {
+      if (newKnown.has(cardId)) {
+        newKnown.delete(cardId);
+        newLearning.add(cardId);
+      } else if (newFamiliar.has(cardId)) {
+        newFamiliar.delete(cardId);
+        newLearning.add(cardId);
+      } else {
+        newLearning.add(cardId);
+      }
+    }
+
+    setKnownCardIds(newKnown);
+    setLearningCardIds(newLearning);
+    setFamiliarCardIds(newFamiliar);
+  };
+
+  const clearDeckProgress = async () => {
+    setKnownCardIds(new Set());
+    setLearningCardIds(new Set());
+    setFamiliarCardIds(new Set());
+    setFlashcardIndex(0);
+
+    const deckKey = getDeckProgressKey();
+    if (!deckKey) return;
+    const root = readStudyProgressRoot();
+    if (root.decks) {
+      delete root.decks[deckKey];
+    }
+    await persistStudyProgressRoot(root);
+    showBanner('Deck progress reset.', 'success');
+  };
+
   const handleTagKnown = () => {
     if (!currentFlashcard) return;
     const newKnown = new Set(knownCardIds);
     newKnown.add(currentFlashcard.id);
     setKnownCardIds(newKnown);
-    
-    if (learningCardIds.has(currentFlashcard.id)) {
-      const newLearn = new Set(learningCardIds);
-      newLearn.delete(currentFlashcard.id);
-      setLearningCardIds(newLearn);
-    }
+
+    const newLearn = new Set(learningCardIds);
+    newLearn.delete(currentFlashcard.id);
+    setLearningCardIds(newLearn);
+
+    const newFamiliar = new Set(familiarCardIds);
+    newFamiliar.delete(currentFlashcard.id);
+    setFamiliarCardIds(newFamiliar);
     advanceCard();
   };
 
@@ -1681,11 +1750,13 @@ export default function App() {
     newLearn.add(currentFlashcard.id);
     setLearningCardIds(newLearn);
 
-    if (knownCardIds.has(currentFlashcard.id)) {
-      const newKnown = new Set(knownCardIds);
-      newKnown.delete(currentFlashcard.id);
-      setKnownCardIds(newKnown);
-    }
+    const newKnown = new Set(knownCardIds);
+    newKnown.delete(currentFlashcard.id);
+    setKnownCardIds(newKnown);
+
+    const newFamiliar = new Set(familiarCardIds);
+    newFamiliar.delete(currentFlashcard.id);
+    setFamiliarCardIds(newFamiliar);
     advanceCard();
   };
 
@@ -1758,18 +1829,21 @@ export default function App() {
       });
     }
 
-  }, [learnState.currentQuestion]);
+  }, [learnState.currentQuestion, activeDeck]);
 
   const handleMcqSelect = (option) => {
     if (learnState.isAnswerSubmitted) return;
+    const currentCardId = learnState.currentQuestion?.card?.id;
     dispatchLearn({ type: 'SET_SELECTED_OPTION', payload: option });
     
     const correct = option === learnState.currentQuestion.card.definition;
     dispatchLearn({ type: 'SUBMIT_ANSWER', payload: { isCorrect: correct } });
+    updateLearnCardStatus(currentCardId, correct);
   };
 
   const handleTfSelect = (userClickedTrue) => {
     if (learnState.isAnswerSubmitted) return;
+    const currentCardId = learnState.currentQuestion?.card?.id;
     dispatchLearn({ type: 'SET_SELECTED_OPTION', payload: userClickedTrue });
 
     const displayedTranslation = mcOptions[0];
@@ -1777,16 +1851,18 @@ export default function App() {
     const isCorrectGrade = (userClickedTrue && isActuallyCorrect) || (!userClickedTrue && !isActuallyCorrect);
 
     dispatchLearn({ type: 'SUBMIT_ANSWER', payload: { isCorrect: isCorrectGrade } });
+    updateLearnCardStatus(currentCardId, isCorrectGrade);
   };
 
   const handleTypeSubmit = () => {
     if (learnState.isAnswerSubmitted) return;
-    
+    const currentCardId = learnState.currentQuestion?.card?.id;
     const isCorrect = isSmartMatch(
       learnState.userAnswer,
       learnState.currentQuestion.card.definition
     );
     dispatchLearn({ type: 'SUBMIT_ANSWER', payload: { isCorrect } });
+    updateLearnCardStatus(currentCardId, isCorrect);
   };
 
   const handleMatchingCardClick = (card) => {
@@ -1814,7 +1890,9 @@ export default function App() {
         const currentlyMatched = [...learnState.matchingMatchedIds, card.id];
         if (currentlyMatched.length >= matchingBoard.totalPairs) {
           const hadMismatches = learnState.matchingMismatchesCount > 0;
-          dispatchLearn({ type: 'SUBMIT_ANSWER', payload: { isCorrect: !hadMismatches } });
+          const isCorrectAnswer = !hadMismatches;
+          dispatchLearn({ type: 'SUBMIT_ANSWER', payload: { isCorrect: isCorrectAnswer } });
+          updateLearnCardStatus(learnState.currentQuestion?.card?.id, isCorrectAnswer);
         }
       } else {
         dispatchLearn({ type: 'INCREMENT_MISMATCHES' });
@@ -1829,6 +1907,44 @@ export default function App() {
       }
     }
   };
+
+  useEffect(() => {
+    const handleGlobalKeys = (e) => {
+      const activeElement = document.activeElement?.tagName;
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(activeElement)) return;
+
+      if (activeTab === 'flashcards') {
+        if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          advanceCard();
+        }
+        if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          prevCard();
+        }
+        if (e.key === 'k' || e.key === 'K') {
+          e.preventDefault();
+          handleTagKnown();
+        }
+        if (e.key === 'l' || e.key === 'L') {
+          e.preventDefault();
+          handleTagLearning();
+        }
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          setIsCardFlipped((prev) => !prev);
+        }
+      }
+
+      if (activeTab === 'learn' && learnState.isAnswerSubmitted && e.key === 'Enter') {
+        e.preventDefault();
+        dispatchLearn({ type: 'NEXT_QUESTION' });
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeys);
+    return () => window.removeEventListener('keydown', handleGlobalKeys);
+  }, [activeTab, learnState.isAnswerSubmitted, advanceCard, prevCard]);
 
   const formatTime = (ms) => {
     if (!ms || ms < 0) return "0:00";
@@ -2393,6 +2509,7 @@ export default function App() {
 
   const handleStoryKeyPress = (e) => {
     if (e.key === 'Enter') {
+      e.preventDefault();
       handleStorySentenceSubmit();
     }
   };
@@ -2404,6 +2521,22 @@ export default function App() {
     setStoryFeed([]);
     setStoryTranslationInput("");
     setShowStoryEnd(false);
+  };
+
+  const clearStoryProgress = async () => {
+    const storyKey = getStoryProgressKey();
+    if (!storyKey) return;
+    const root = readStudyProgressRoot();
+    if (root.stories?.[storyKey]) {
+      delete root.stories[storyKey];
+      if (root.lastStoryId === storyKey) delete root.lastStoryId;
+      await persistStudyProgressRoot(root);
+    }
+    setCurrentSentenceIndex(0);
+    setStoryFeed([]);
+    setStoryTranslationInput("");
+    setShowStoryEnd(false);
+    showBanner('Story progress reset.', 'success');
   };
 
   const getStoryProgress = () => {
@@ -2690,6 +2823,7 @@ export default function App() {
         {activeTab === 'flashcards' && (
           <FlashcardsTab
             activeDeck={activeDeck} advanceCard={advanceCard} answer={answer} cards={cards} clearCsvImport={clearCsvImport} cloudDecks={cloudDecks} cloudLoading={cloudLoading} confirmImportDeck={confirmImportDeck} csvFileName={csvFileName} csvPasteText={csvPasteText} csvPreviewCards={csvPreviewCards} current={current} currentFlashcard={currentFlashcard} data={data} dbConnected={dbConnected} fetchCloudDecks={fetchCloudDecks} fileInputRef={fileInputRef} flashcardIndex={flashcardIndex} handleCsvFile={handleCsvFile} handleCsvPasteArea={handleCsvPasteArea} handleDragLeave={handleDragLeave} handleDragOver={handleDragOver} handleDrop={handleDrop} handleParseCsvPaste={handleParseCsvPaste} handleSelectCloudDeck={handleSelectCloudDeck} handleTagKnown={handleTagKnown} handleTagLearning={handleTagLearning} isAdmin={isAdmin} isCardFlipped={isCardFlipped} isDraggingCsv={isDraggingCsv} isInClass={isInClass} knownCardIds={knownCardIds} learningCardIds={learningCardIds} n={n} pasted={pasted} prevCard={prevCard} queue={queue} ref={ref} session={session} setCsvPasteText={setCsvPasteText} setIsCardFlipped={setIsCardFlipped} title={title} type={type}
+            clearDeckProgress={clearDeckProgress}
           />
         )}
 
@@ -2698,7 +2832,7 @@ export default function App() {
             ========================================== */}
         {activeTab === 'learn' && (
           <LearnTab
-            activeDeck={activeDeck} answer={answer} cards={cards} correct={correct} dispatchLearn={dispatchLearn} formatTime={formatTime} handleMatchingCardClick={handleMatchingCardClick} handleMcqSelect={handleMcqSelect} handleTfSelect={handleTfSelect} handleTypeSubmit={handleTypeSubmit} isCorrect={isCorrect} isInClass={isInClass} isMatched={isMatched} isMismatched={isMismatched} isSelected={isSelected} isTarget={isTarget} learnState={learnState} matched={matched} matchingBoard={matchingBoard} matchingCardKey={matchingCardKey} mcOptions={mcOptions} options={options} payload={payload} prompt={prompt} selected={selected} session={session} title={title} type={type}
+            activeDeck={activeDeck} answer={answer} cards={cards} correct={correct} dispatchLearn={dispatchLearn} formatTime={formatTime} handleMatchingCardClick={handleMatchingCardClick} handleMcqSelect={handleMcqSelect} handleTfSelect={handleTfSelect} handleTypeSubmit={handleTypeSubmit} isCorrect={isCorrect} isInClass={isInClass} isMatched={isMatched} isMismatched={isMismatched} isSelected={isSelected} isTarget={isTarget} learnState={learnState} matched={matched} matchingBoard={matchingBoard} matchingCardKey={matchingCardKey} mcOptions={mcOptions} options={options} payload={payload} prompt={prompt} selected={selected} session={session} title={title} type={type} knownCardIds={knownCardIds} learningCardIds={learningCardIds} familiarCardIds={familiarCardIds}
           />
         )}
 
@@ -2717,6 +2851,7 @@ export default function App() {
         {activeTab === 'story' && (
           <StoryTab
             activeStory={activeStory} answer={answer} cloudStories={cloudStories} currentSentenceIndex={currentSentenceIndex} customStoryText={customStoryText} feedContainerRef={feedContainerRef} feedItem={feedItem} getStoryProgress={getStoryProgress} gradingLoading={gradingLoading} handlePublishGlobalStory={handlePublishGlobalStory} handleStoryKeyPress={handleStoryKeyPress} handleStorySentenceSubmit={handleStorySentenceSubmit} idx={idx} isAdmin={isAdmin} isInClass={isInClass} pasted={pasted} ref={ref} resetStoryMode={resetStoryMode} selectedStoryIndex={selectedStoryIndex} sentences={sentences} session={session} setCustomStoryText={setCustomStoryText} setSelectedStoryIndex={setSelectedStoryIndex} setStoryActiveTab={setStoryActiveTab} setStoryTranslationInput={setStoryTranslationInput} showStoryEnd={showStoryEnd} startCustomStory={startCustomStory} startPresetStory={startPresetStory} storyActiveTab={storyActiveTab} storyFeed={storyFeed} storyStarted={storyStarted} storyTranslationInput={storyTranslationInput} tabs={tabs} title={title} user={user}
+            clearStoryProgress={clearStoryProgress}
           />
         )}
 

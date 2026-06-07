@@ -3,7 +3,7 @@ import { FolderIcon, UploadIcon, SettingsIcon, StarIcon, CheckIcon, XIcon, Arrow
 
 export default function FlashcardsTab(props) {
   const {
-    activeDeck, advanceCard, answer, cards, clearCsvImport, cloudDecks, cloudLoading, confirmImportDeck, csvFileName, csvPasteText, csvPreviewCards, current, currentFlashcard, data, dbConnected, fetchCloudDecks, fileInputRef, flashcardIndex, handleCsvFile, handleCsvPasteArea, handleDragLeave, handleDragOver, handleDrop, handleParseCsvPaste, handleSelectCloudDeck, handleTagKnown, handleTagLearning, isAdmin, isCardFlipped, isDraggingCsv, isInClass, key, knownCardIds, learningCardIds, n, pasted, prevCard, queue, ref, session, setCsvPasteText, setIsCardFlipped, title, type
+    activeDeck, advanceCard, answer, cards, clearCsvImport, cloudDecks, cloudLoading, confirmImportDeck, csvFileName, csvPasteText, csvPreviewCards, current, currentFlashcard, data, dbConnected, fetchCloudDecks, fileInputRef, flashcardIndex, handleCsvFile, handleCsvPasteArea, handleDragLeave, handleDragOver, handleDrop, handleParseCsvPaste, handleSelectCloudDeck, handleTagKnown, handleTagLearning, clearDeckProgress, isAdmin, isCardFlipped, isDraggingCsv, isInClass, key, knownCardIds, learningCardIds, n, pasted, prevCard, queue, ref, session, setCsvPasteText, setIsCardFlipped, title, type
   } = props;
 
   return (
@@ -11,7 +11,7 @@ export default function FlashcardsTab(props) {
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: dbConnected && (isInClass || isAdmin) ? '1fr minmax(280px, 360px)' : '1fr',
+                gridTemplateColumns: dbConnected && (isInClass || isAdmin) ? '1.4fr minmax(360px, 560px)' : '1fr',
                 gap: '1.75rem',
                 alignItems: 'start',
               }}
@@ -19,16 +19,16 @@ export default function FlashcardsTab(props) {
               
               {/* Left Side: Active Flashcard Viewer */}
               {activeDeck.length > 0 ? (
-                <div className="card text-center" style={{ minHeight: '480px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                <div className="card text-center" style={{ minHeight: '520px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                   <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
                       <span className="custom-badge">
                         Card {flashcardIndex + 1} of {activeDeck.length}
                       </span>
-                      <span className="custom-badge" style={{ fontSize: '0.65rem', fontWeight: 600 }}>
+                      <span className="custom-badge" style={{ fontSize: '0.75rem', fontWeight: 600 }}>
                         {session ? 'Progress auto-saves' : 'Sign in to save progress'}
                       </span>
-                      <div className="d-flex gap-2">
+                      <div className="d-flex gap-2" style={{ flexWrap: 'wrap', justifyContent: 'center' }}>
                         {knownCardIds.has(currentFlashcard.id) && (
                           <span className="custom-badge custom-badge-green">Mastered</span>
                         )}
@@ -36,6 +36,9 @@ export default function FlashcardsTab(props) {
                           <span className="custom-badge custom-badge-yellow">Learning</span>
                         )}
                       </div>
+                      <button className="btn btn-secondary" style={{ padding: '0.5rem 0.85rem', fontSize: '0.8rem' }} onClick={clearDeckProgress}>
+                        Reset Deck Progress
+                      </button>
                     </div>
 
                     <div className="progress-container">
@@ -79,28 +82,12 @@ export default function FlashcardsTab(props) {
 
                   {/* Tagging Operations */}
                   <div>
-                    <div className="button-group mb-4">
-                      <button 
-                        className="btn btn-secondary"
-                        style={{ borderColor: 'var(--error-border)', color: 'var(--error-red)' }}
-                        onClick={handleTagLearning}
-                      >
+                    <div className="button-group" style={{ borderTop: '1px solid var(--border-gray)', paddingTop: '1.15rem' }}>
+                      <button className="btn btn-secondary" onClick={handleTagLearning}>
                         Still Learning
                       </button>
-                      <button 
-                        className="btn btn-success"
-                        onClick={handleTagKnown}
-                      >
+                      <button className="btn btn-success" onClick={handleTagKnown}>
                         Known
-                      </button>
-                    </div>
-
-                    <div className="button-group" style={{ borderTop: '1px solid var(--border-gray)', paddingTop: '1.15rem' }}>
-                      <button className="btn btn-secondary" onClick={prevCard}>
-                        <ArrowLeftIcon className="icon-svg-sm" /> Previous
-                      </button>
-                      <button className="btn btn-secondary" onClick={advanceCard}>
-                        Next <ArrowRightIcon className="icon-svg-sm" />
                       </button>
                     </div>
                   </div>

@@ -7,7 +7,7 @@ export default function SettingsTab(props) {
   } = props;
 
   return (
-    <div className="settings-tab-container" style={{ maxWidth: '640px', margin: '0 auto' }}>
+    <div className="settings-tab-container" style={{ maxWidth: '980px', margin: '0 auto' }}>
             <div className="card">
               <h2 className="card-title">Settings</h2>
               <p className="card-subtitle">Manage appearance and class enrollment.</p>

@@ -3,8 +3,23 @@ import { FolderIcon, UploadIcon, SettingsIcon, StarIcon, CheckIcon, XIcon, Arrow
 
 export default function LearnTab(props) {
   const {
-    activeDeck, answer, cards, correct, dispatchLearn, formatTime, handleMatchingCardClick, handleMcqSelect, handleTfSelect, handleTypeSubmit, isCorrect, isInClass, isMatched, isMismatched, isSelected, isTarget, key, learnState, matched, matchingBoard, matchingCardKey, mcOptions, options, payload, prompt, selected, session, title, type
+    activeDeck, answer, cards, correct, dispatchLearn, formatTime, handleMatchingCardClick, handleMcqSelect, handleTfSelect, handleTypeSubmit, isCorrect, isInClass, isMatched, isMismatched, isSelected, isTarget, key, learnState, matched, matchingBoard, matchingCardKey, mcOptions, options, payload, prompt, selected, session, title, type,
+    knownCardIds, learningCardIds, familiarCardIds,
   } = props;
+
+  const masteredCount = knownCardIds?.size || 0;
+  const learningCount = learningCardIds?.size || 0;
+  const familiarCount = familiarCardIds?.size || 0;
+  const newCount = Math.max(0, activeDeck.length - masteredCount - learningCount - familiarCount);
+  const currentCardStatus = learnState.currentQuestion
+    ? knownCardIds.has(learnState.currentQuestion.card.id)
+      ? 'Mastered'
+      : learningCardIds.has(learnState.currentQuestion.card.id)
+        ? 'Learning'
+        : familiarCardIds.has(learnState.currentQuestion.card.id)
+          ? 'Familiar'
+          : 'New'
+    : null;
 
   return (
     <div className="learn-tab-container">
@@ -81,6 +96,25 @@ export default function LearnTab(props) {
                   </div>
                 </div>
 
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
+                  <div style={{ backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '0.75rem', padding: '0.85rem', textAlign: 'center' }}>
+                    <div style={{ fontSize: '0.75rem', color: '#475569' }}>New</div>
+                    <strong style={{ fontSize: '1.2rem', display: 'block', marginTop: '0.35rem' }}>{newCount}</strong>
+                  </div>
+                  <div style={{ backgroundColor: '#FEF3C7', border: '1px solid #FDE68A', borderRadius: '0.75rem', padding: '0.85rem', textAlign: 'center' }}>
+                    <div style={{ fontSize: '0.75rem', color: '#92400E' }}>Familiar</div>
+                    <strong style={{ fontSize: '1.2rem', display: 'block', marginTop: '0.35rem' }}>{familiarCount}</strong>
+                  </div>
+                  <div style={{ backgroundColor: '#FEE2E2', border: '1px solid #FCA5A5', borderRadius: '0.75rem', padding: '0.85rem', textAlign: 'center' }}>
+                    <div style={{ fontSize: '0.75rem', color: '#9A3412' }}>Learning</div>
+                    <strong style={{ fontSize: '1.2rem', display: 'block', marginTop: '0.35rem' }}>{learningCount}</strong>
+                  </div>
+                  <div style={{ backgroundColor: '#DCFCE7', border: '1px solid #86EFAC', borderRadius: '0.75rem', padding: '0.85rem', textAlign: 'center' }}>
+                    <div style={{ fontSize: '0.75rem', color: '#14532D' }}>Mastered</div>
+                    <strong style={{ fontSize: '1.2rem', display: 'block', marginTop: '0.35rem' }}>{masteredCount}</strong>
+                  </div>
+                </div>
+
                 <div style={{ borderTop: '1px solid var(--border-gray)', paddingTop: '1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 500 }}>
                     Study deck contains <strong>{activeDeck.length}</strong> cards.
@@ -89,7 +123,13 @@ export default function LearnTab(props) {
                     className="btn btn-primary"
                     onClick={() => dispatchLearn({ 
                       type: 'START_SESSION', 
-                      payload: { deck: activeDeck, types: learnState.questionTypes } 
+                      payload: { 
+                        deck: activeDeck, 
+                        types: learnState.questionTypes,
+                        knownIds: [...knownCardIds],
+                        learningIds: [...learningCardIds],
+                        familiarIds: [...familiarCardIds]
+                      } 
                     })}
                   >
                     Start Session
@@ -101,9 +141,12 @@ export default function LearnTab(props) {
               /* 2. Active Learn interactive panel */
               <div className="card" style={{ maxWidth: '580px', margin: '0 auto', minHeight: '380px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                 <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
                     <span className="custom-badge">
                       Progress: {learnState.totalQuestionsCount - learnState.questionQueue.length} / {learnState.totalQuestionsCount}
+                    </span>
+                    <span className="custom-badge learn-status-badge">
+                      Current: {currentCardStatus}
                     </span>
                     <span style={{ fontSize: '0.75rem', color: 'var(--text-light)', fontWeight: 600 }}>
                       {session ? 'Progress auto-saves' : `Remaining: ${learnState.questionQueue.length}`}
@@ -128,7 +171,7 @@ export default function LearnTab(props) {
                   {/* MC Question Template */}
                   {learnState.currentQuestion.type === 'mc' && (
                     <div>
-                      <h3 className="question-prompt">How do you translate: "{learnState.currentQuestion.card.term}"?</h3>
+                      <h3 className="question-prompt">How do you translate: {learnState.currentQuestion.card.term}?</h3>
                       <div className="options-grid">
                         {mcOptions.map((opt, i) => {
                           let className = "option-button";
@@ -158,7 +201,7 @@ export default function LearnTab(props) {
                   {learnState.currentQuestion.type === 'type' && (
                     <div>
                       <div className="text-center" style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--dark-navy)', marginBottom: '1.25rem' }}>
-                        "{learnState.currentQuestion.card.term}"
+                        {learnState.currentQuestion.card.term}
                       </div>
                       
                       <div className="input-container">
@@ -170,8 +213,12 @@ export default function LearnTab(props) {
                           value={learnState.userAnswer}
                           onChange={(e) => dispatchLearn({ type: 'SET_ANSWER', payload: e.target.value })}
                           onKeyDown={(e) => {
-                            if (e.key === 'Enter') handleTypeSubmit();
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleTypeSubmit();
+                            }
                           }}
+                          autoFocus={learnState.currentQuestion.type === 'type'}
                         />
                         {!learnState.isAnswerSubmitted && (
                           <button 
@@ -193,9 +240,9 @@ export default function LearnTab(props) {
                       
                       <div className="tf-container">
                         <div className="tf-card">
-                          <div className="tf-spanish">"{learnState.currentQuestion.card.term}"</div>
+                            <div className="tf-spanish">{learnState.currentQuestion.card.term}</div>
                           <div className="tf-separator">means</div>
-                          <div className="tf-english">"{mcOptions[0]}"</div>
+                            <div className="tf-english">{mcOptions[0]}</div>
                         </div>
 
                         <div className="tf-buttons">
