@@ -1425,6 +1425,14 @@ body {
   padding: 0 0.25rem;
 }
 
+/* App Layout Container */
+.app-layout {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background-color: var(--light-gray);
+}
+
 .app-banner-dismiss:hover {
   opacity: 1;
 }
