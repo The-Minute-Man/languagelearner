@@ -795,6 +795,7 @@ export default function App() {
 
   // Auth & Admin State
   const [session, setSession] = useState(null);
+  const [authInitialized, setAuthInitialized] = useState(false);
   const [authView, setAuthView] = useState('login');
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
@@ -892,9 +893,11 @@ export default function App() {
         }
         if (mounted) {
           setSession(data?.session ?? null);
+          setAuthInitialized(true);
         }
       } catch (err) {
         console.error("Failed to load auth session:", err);
+        if (mounted) setAuthInitialized(true);
       }
     };
 
@@ -2383,10 +2386,22 @@ export default function App() {
   const SQL_SCRIPTS = `-- See supabase/migrations/001_classes_and_profiles.sql for the full schema,
 -- including classes, user_profiles, class-scoped decks/stories, and RLS policies.`;
 
+  // Show loading spinner while auth is initializing
+  if (!authInitialized) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'var(--light-gray)' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
+          <div style={{ width: '2.5rem', height: '2.5rem', border: '3px solid var(--border-gray)', borderTopColor: 'var(--primary-blue)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+          <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 500 }}>Loading...</span>
+        </div>
+      </div>
+    );
+  }
+
   // Render Auth View if not logged in
   if (!session) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'var(--bg-color)' }}>
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'var(--light-gray)' }}>
         <div className="card" style={{ maxWidth: '400px', width: '100%', padding: '2rem' }}>
           <div className="text-center" style={{ marginBottom: '1.5rem' }}>
             <div style={{ display: 'inline-flex', width: '3.5rem', height: '3.5rem', backgroundColor: 'var(--primary-blue)', color: 'white', borderRadius: 'var(--radius-md)', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem' }}>
