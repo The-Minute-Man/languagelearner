@@ -1758,17 +1758,7 @@ export default function App() {
 
   const handleTagKnown = () => {
     if (!currentFlashcard) return;
-    const newKnown = new Set(knownCardIds);
-    newKnown.add(currentFlashcard.id);
-    setKnownCardIds(newKnown);
-
-    const newLearn = new Set(learningCardIds);
-    newLearn.delete(currentFlashcard.id);
-    setLearningCardIds(newLearn);
-
-    const newFamiliar = new Set(familiarCardIds);
-    newFamiliar.delete(currentFlashcard.id);
-    setFamiliarCardIds(newFamiliar);
+    updateLearnCardStatus(currentFlashcard.id, true);
     advanceCard();
   };
 

@@ -345,11 +345,8 @@ export default function LearnTab(props) {
                   {learnState.isAnswerSubmitted && (
                     <div className={`feedback-overlay ${learnState.isCorrect ? 'correct' : 'incorrect'}`}>
                       <div>
-                        <div className="feedback-text-title">
-                          {learnState.isCorrect ? "Correct" : "Needs Review"}
-                        </div>
-                        <div className="feedback-text-desc">
-                          Answer: <strong>{learnState.currentQuestion.card.definition}</strong>
+                        <div className="feedback-text-desc" style={{ fontSize: '1.35rem', fontWeight: 700, letterSpacing: '0.01em', lineHeight: 1.3 }}>
+                          <strong>{learnState.currentQuestion.card.definition}</strong>
                         </div>
                       </div>
                       <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
