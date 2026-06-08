@@ -3,7 +3,7 @@ import { FolderIcon, UploadIcon, SettingsIcon, StarIcon, CheckIcon, XIcon, Arrow
 
 export default function LearnTab(props) {
   const {
-    activeDeck, answer, cards, correct, dispatchLearn, formatTime, handleMatchingCardClick, handleMcqSelect, handleTfSelect, handleTypeSubmit, handleLearnEnter, isCorrect, isInClass, isMatched, isMismatched, isSelected, isTarget, key, learnState, matched, matchingBoard, matchingCardKey, mcOptions, options, payload, prompt, selected, session, title, type,
+    activeDeck, answer, cards, correct, dispatchLearn, formatTime, handleMatchingCardClick, handleMcqSelect, handleTfSelect, handleTypeSubmit, handleLearnEnter, handleOverrideCorrect, isCorrect, isInClass, isMatched, isMismatched, isSelected, isTarget, key, learnState, matched, matchingBoard, matchingCardKey, mcOptions, options, payload, prompt, selected, session, title, type,
     knownCardIds, learningCardIds, familiarCardIds, clearDeckProgress,
   } = props;
 
@@ -13,10 +13,10 @@ export default function LearnTab(props) {
   const newCount = Math.max(0, activeDeck.length - masteredCount - learningCount - familiarCount);
   const totalDeckCount = activeDeck.length || 1;
   const statusSegments = [
-    { label: 'New', count: newCount, color: '#60A5FA' },
-    { label: 'Familiar', count: familiarCount, color: '#F59E0B' },
-    { label: 'Learning', count: learningCount, color: '#F97316' },
-    { label: 'Mastered', count: masteredCount, color: '#10B981' }
+    { label: 'New', count: newCount, color: '#FCA5A5' },
+    { label: 'Familiar', count: familiarCount, color: '#FDE68A' },
+    { label: 'Learning', count: learningCount, color: '#93C5FD' },
+    { label: 'Mastered', count: masteredCount, color: '#86EFAC' }
   ];
   const currentCardStatus = learnState.currentQuestion
     ? knownCardIds.has(learnState.currentQuestion.card.id)
@@ -27,6 +27,16 @@ export default function LearnTab(props) {
           ? 'Familiar'
           : 'New'
     : null;
+
+  const typeInputRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (learnState.currentQuestion?.type === 'type' && !learnState.isAnswerSubmitted) {
+      window.requestAnimationFrame(() => {
+        typeInputRef.current?.focus();
+      });
+    }
+  }, [learnState.currentQuestion?.card?.id, learnState.currentQuestion?.type, learnState.isAnswerSubmitted]);
 
   return (
     <div className="learn-tab-container">
@@ -104,16 +114,16 @@ export default function LearnTab(props) {
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
-                  <div style={{ backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '0.75rem', padding: '0.85rem', textAlign: 'center' }}>
-                    <div style={{ fontSize: '0.75rem', color: '#475569' }}>New</div>
+                  <div style={{ backgroundColor: '#FEE2E2', border: '1px solid #FCA5A5', borderRadius: '0.75rem', padding: '0.85rem', textAlign: 'center' }}>
+                    <div style={{ fontSize: '0.75rem', color: '#991B1B' }}>New</div>
                     <strong style={{ fontSize: '1.2rem', display: 'block', marginTop: '0.35rem' }}>{newCount}</strong>
                   </div>
                   <div style={{ backgroundColor: '#FEF3C7', border: '1px solid #FDE68A', borderRadius: '0.75rem', padding: '0.85rem', textAlign: 'center' }}>
                     <div style={{ fontSize: '0.75rem', color: '#92400E' }}>Familiar</div>
                     <strong style={{ fontSize: '1.2rem', display: 'block', marginTop: '0.35rem' }}>{familiarCount}</strong>
                   </div>
-                  <div style={{ backgroundColor: '#FEE2E2', border: '1px solid #FCA5A5', borderRadius: '0.75rem', padding: '0.85rem', textAlign: 'center' }}>
-                    <div style={{ fontSize: '0.75rem', color: '#9A3412' }}>Learning</div>
+                  <div style={{ backgroundColor: '#DBEAFE', border: '1px solid #93C5FD', borderRadius: '0.75rem', padding: '0.85rem', textAlign: 'center' }}>
+                    <div style={{ fontSize: '0.75rem', color: '#1D4ED8' }}>Learning</div>
                     <strong style={{ fontSize: '1.2rem', display: 'block', marginTop: '0.35rem' }}>{learningCount}</strong>
                   </div>
                   <div style={{ backgroundColor: '#DCFCE7', border: '1px solid #86EFAC', borderRadius: '0.75rem', padding: '0.85rem', textAlign: 'center' }}>
@@ -214,12 +224,12 @@ export default function LearnTab(props) {
                       <div className="input-container">
                         <input 
                           type="text"
+                          ref={typeInputRef}
                           className="text-answer-input"
                           placeholder="Type translation here..."
                           disabled={learnState.isAnswerSubmitted}
                           value={learnState.userAnswer}
                           onChange={(e) => dispatchLearn({ type: 'SET_ANSWER', payload: e.target.value })}
-                          autoFocus={learnState.currentQuestion.type === 'type'}
                         />
                         {!learnState.isAnswerSubmitted && (
                           <button 
@@ -339,15 +349,26 @@ export default function LearnTab(props) {
                           {learnState.isCorrect ? "Correct" : "Needs Review"}
                         </div>
                         <div className="feedback-text-desc">
-                          Spanish: <strong>{learnState.currentQuestion.card.term}</strong> = English: <strong>{learnState.currentQuestion.card.definition}</strong>
+                          Answer: <strong>{learnState.currentQuestion.card.definition}</strong>
                         </div>
                       </div>
-                      <button 
-                        className="btn btn-primary"
-                        onClick={() => dispatchLearn({ type: 'NEXT_QUESTION' })}
-                      >
-                        Continue
-                      </button>
+                      <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                        {learnState.isCorrect === false && (
+                          <button 
+                            className="btn btn-secondary"
+                            onClick={handleOverrideCorrect}
+                            type="button"
+                          >
+                            Mark Correct
+                          </button>
+                        )}
+                        <button 
+                          className="btn btn-primary"
+                          onClick={() => dispatchLearn({ type: 'NEXT_QUESTION' })}
+                        >
+                          Continue
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>

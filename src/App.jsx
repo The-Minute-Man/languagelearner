@@ -683,6 +683,22 @@ function learnReducer(state, action) {
       };
     }
 
+    case 'OVERRIDE_CORRECT': {
+      const current = state.currentQuestion;
+      if (!current) return state;
+
+      const totalAttempts = state.totalAttempts + 1;
+      const firstTimeCorrect = current.attempts === 0 ? state.firstTimeCorrect + 1 : state.firstTimeCorrect;
+
+      return {
+        ...state,
+        isAnswerSubmitted: true,
+        isCorrect: true,
+        totalAttempts,
+        firstTimeCorrect
+      };
+    }
+
     case 'NEXT_QUESTION': {
       const { isCorrect } = state;
       const current = state.currentQuestion;
@@ -1432,6 +1448,7 @@ export default function App() {
   const [activeCloudDeckId, setActiveCloudDeckId] = useState(null);
   const progressSaveTimerRef = useRef(null);
   const storyProgressSaveTimerRef = useRef(null);
+  const currentQuestionStatusRef = useRef(null);
 
   const getDeckProgressKey = () => {
     if (activeCloudDeckId) return activeCloudDeckId;
@@ -1681,35 +1698,46 @@ export default function App() {
     return 'new';
   };
 
-  const updateLearnCardStatus = (cardId, isCorrect) => {
+  const updateLearnCardStatus = (cardId, isCorrect, statusAtQuestionStart = null) => {
     if (!cardId) return;
     const newKnown = new Set(knownCardIds);
     const newLearning = new Set(learningCardIds);
     const newFamiliar = new Set(familiarCardIds);
 
+    const status = statusAtQuestionStart || getLearnStatusForCard(cardId);
+    newKnown.delete(cardId);
+    newLearning.delete(cardId);
+    newFamiliar.delete(cardId);
+
     if (isCorrect) {
-      if (newLearning.has(cardId) || newFamiliar.has(cardId)) {
-        newLearning.delete(cardId);
-        newFamiliar.delete(cardId);
-        newKnown.add(cardId);
-      } else if (!newKnown.has(cardId)) {
+      if (status === 'new') {
         newFamiliar.add(cardId);
-      }
-    } else {
-      if (newKnown.has(cardId)) {
-        newKnown.delete(cardId);
-        newLearning.add(cardId);
-      } else if (newFamiliar.has(cardId)) {
-        newFamiliar.delete(cardId);
+      } else if (status === 'familiar') {
         newLearning.add(cardId);
       } else {
+        newKnown.add(cardId);
+      }
+    } else {
+      if (status === 'mastered') {
         newLearning.add(cardId);
+      } else if (status === 'learning') {
+        newFamiliar.add(cardId);
+      } else {
+        newFamiliar.delete(cardId);
+        // new or familiar stay new/familiar as needed, no additional promotion
       }
     }
 
     setKnownCardIds(newKnown);
     setLearningCardIds(newLearning);
     setFamiliarCardIds(newFamiliar);
+  };
+
+  const handleOverrideCorrect = () => {
+    const cardId = learnState.currentQuestion?.card?.id;
+    if (!cardId) return;
+    updateLearnCardStatus(cardId, true, currentQuestionStatusRef.current);
+    dispatchLearn({ type: 'OVERRIDE_CORRECT' });
   };
 
   const clearDeckProgress = async () => {
@@ -1780,6 +1808,16 @@ export default function App() {
   // PART 2: LEARN MODE STATE
   // ==========================================
   const [learnState, dispatchLearn] = useReducer(learnReducer, initialLearnState);
+
+  useEffect(() => {
+    const cardId = learnState.currentQuestion?.card?.id;
+    if (!cardId) {
+      currentQuestionStatusRef.current = null;
+      return;
+    }
+    currentQuestionStatusRef.current = getLearnStatusForCard(cardId);
+  }, [learnState.currentQuestion?.card?.id]);
+
   const [mcOptions, setMcOptions] = useState([]);
   const [matchingBoard, setMatchingBoard] = useState([]);
 
@@ -2860,7 +2898,7 @@ export default function App() {
             ========================================== */}
         {activeTab === 'learn' && (
           <LearnTab
-            activeDeck={activeDeck} answer={answer} cards={cards} correct={correct} dispatchLearn={dispatchLearn} formatTime={formatTime} handleMatchingCardClick={handleMatchingCardClick} handleMcqSelect={handleMcqSelect} handleTfSelect={handleTfSelect} handleTypeSubmit={handleTypeSubmit} handleLearnEnter={handleLearnEnter} isCorrect={isCorrect} isInClass={isInClass} isMatched={isMatched} isMismatched={isMismatched} isSelected={isSelected} isTarget={isTarget} learnState={learnState} matched={matched} matchingBoard={matchingBoard} matchingCardKey={matchingCardKey} mcOptions={mcOptions} options={options} payload={payload} prompt={prompt} selected={selected} session={session} title={title} type={type} knownCardIds={knownCardIds} learningCardIds={learningCardIds} familiarCardIds={familiarCardIds} clearDeckProgress={clearDeckProgress}
+            activeDeck={activeDeck} answer={answer} cards={cards} correct={correct} dispatchLearn={dispatchLearn} formatTime={formatTime} handleMatchingCardClick={handleMatchingCardClick} handleMcqSelect={handleMcqSelect} handleTfSelect={handleTfSelect} handleTypeSubmit={handleTypeSubmit} handleLearnEnter={handleLearnEnter} handleOverrideCorrect={handleOverrideCorrect} isCorrect={isCorrect} isInClass={isInClass} isMatched={isMatched} isMismatched={isMismatched} isSelected={isSelected} isTarget={isTarget} learnState={learnState} matched={matched} matchingBoard={matchingBoard} matchingCardKey={matchingCardKey} mcOptions={mcOptions} options={options} payload={payload} prompt={prompt} selected={selected} session={session} title={title} type={type} knownCardIds={knownCardIds} learningCardIds={learningCardIds} familiarCardIds={familiarCardIds} clearDeckProgress={clearDeckProgress}
           />
         )}
 
