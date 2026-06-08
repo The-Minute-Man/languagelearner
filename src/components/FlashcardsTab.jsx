@@ -3,15 +3,44 @@ import { FolderIcon, UploadIcon, SettingsIcon, StarIcon, CheckIcon, XIcon, Arrow
 
 export default function FlashcardsTab(props) {
   const {
-    activeDeck, advanceCard, answer, cards, clearCsvImport, cloudDecks, cloudLoading, confirmImportDeck, csvFileName, csvPasteText, csvPreviewCards, current, currentFlashcard, data, dbConnected, fetchCloudDecks, fileInputRef, flashcardIndex, handleCsvFile, handleCsvPasteArea, handleDragLeave, handleDragOver, handleDrop, handleParseCsvPaste, handleSelectCloudDeck, handleTagKnown, handleTagLearning, clearDeckProgress, isAdmin, isCardFlipped, isDraggingCsv, isInClass, key, knownCardIds, learningCardIds, n, pasted, prevCard, queue, ref, session, setCsvPasteText, setIsCardFlipped, title, type
+    activeDeck, advanceCard, answer, cards, clearCsvImport, cloudDecks, cloudLoading, confirmImportDeck, csvFileName, csvPasteText, csvPreviewCards, current, currentFlashcard, data, dbConnected, fetchCloudDecks, fileInputRef, flashcardIndex, handleCsvFile, handleCsvPasteArea, handleDragLeave, handleDragOver, handleDrop, handleParseCsvPaste, handleSelectCloudDeck, handleTagKnown, handleTagLearning, clearDeckProgress, isAdmin, isCardFlipped, isDraggingCsv, isInClass, key, knownCardIds, learningCardIds, familiarCardIds, n, pasted, prevCard, queue, ref, session, setCsvPasteText, setIsCardFlipped, title, type
   } = props;
+
+  const [deckLibraryOpen, setDeckLibraryOpen] = React.useState(activeDeck.length === 0);
+
+  React.useEffect(() => {
+    if (activeDeck.length === 0) {
+      setDeckLibraryOpen(true);
+    } else {
+      setDeckLibraryOpen(false);
+    }
+  }, [activeDeck.length]);
+
+  const masteredCount = knownCardIds?.size || 0;
+  const learningCount = learningCardIds?.size || 0;
+  const familiarCount = familiarCardIds?.size || 0;
+  const newCount = Math.max(0, activeDeck.length - masteredCount - learningCount - familiarCount);
+  const totalDeckCount = activeDeck.length || 1;
+  const statusSegments = [
+    { label: 'New', count: newCount, color: '#FEE2E2' },
+    { label: 'Familiar', count: familiarCount, color: '#FEF3C7' },
+    { label: 'Learning', count: learningCount, color: '#DBEAFE' },
+    { label: 'Mastered', count: masteredCount, color: '#DCFCE7' }
+  ];
+
+  const showDeckLibraryPanel = dbConnected && (isInClass || isAdmin);
+  const hideDeckLibrary = activeDeck.length > 0 && showDeckLibraryPanel;
+  const libraryCollapsedWidth = '16px';
+  const libraryExpandedWidth = '280px';
+  const libraryWidth = deckLibraryOpen ? libraryExpandedWidth : libraryCollapsedWidth;
+  const libraryColumn = hideDeckLibrary && !deckLibraryOpen ? libraryCollapsedWidth : `minmax(240px, ${libraryExpandedWidth})`;
 
   return (
     <div className="flashcards-tab-container">
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: dbConnected && (isInClass || isAdmin) ? '3fr minmax(168px, 264px)' : '1fr',
+                gridTemplateColumns: showDeckLibraryPanel ? `3fr ${libraryColumn}` : '1fr',
                 gap: '1.25rem',
                 alignItems: 'start',
               }}
@@ -43,14 +72,30 @@ export default function FlashcardsTab(props) {
 
                     <div className="progress-container">
                       <div className="progress-bar-bg">
-                        <div 
-                          className="progress-bar-fill"
-                          style={{ width: `${activeDeck.length > 0 ? (knownCardIds.size / activeDeck.length) * 100 : 0}%` }}
-                        ></div>
+                        {statusSegments.map((segment) => (
+                          <div
+                            key={segment.label}
+                            style={{
+                              width: `${(segment.count / totalDeckCount) * 100}%`,
+                              backgroundColor: segment.color,
+                              height: '100%',
+                              display: 'inline-block',
+                              transition: 'width 0.3s ease'
+                            }}
+                          />
+                        ))}
                       </div>
                     </div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-light)', fontWeight: 600, marginTop: '0.35rem' }}>
-                      Deck completion: {activeDeck.length > 0 ? Math.round((knownCardIds.size / activeDeck.length) * 100) : 0}% ({knownCardIds.size}/{activeDeck.length} mastered)
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: '0.75rem', marginTop: '0.75rem' }}>
+                      {statusSegments.map((segment) => (
+                        <div key={segment.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem', borderRadius: '0.75rem', backgroundColor: '#FFFFFF', border: '1px solid #E5E7EB' }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                            <span style={{ width: '0.75rem', height: '0.75rem', borderRadius: '9999px', backgroundColor: segment.color, display: 'inline-block' }} />
+                            {segment.label}
+                          </span>
+                          <strong style={{ fontSize: '0.9rem', color: 'var(--text-main)' }}>{segment.count}</strong>
+                        </div>
+                      ))}
                     </div>
                   </div>
 
@@ -118,10 +163,53 @@ export default function FlashcardsTab(props) {
                 </div>
               )}
 
-              {/* Right panel: Deck Library (always accessible) + Admin importer */}
-              {dbConnected && (isInClass || isAdmin) && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                  <div className="card" style={{ height: 'fit-content' }}>
+              {/* Right panel: Deck Library (hidden when a deck is selected) + Admin importer */}
+              {showDeckLibraryPanel && (
+                <div
+                  style={{
+                    position: 'relative',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '1.25rem',
+                    overflow: 'hidden',
+                    width: libraryWidth,
+                    minWidth: libraryWidth,
+                    maxWidth: libraryWidth,
+                    transition: 'width 0.35s ease',
+                    height: deckLibraryOpen ? 'auto' : '56px',
+                  }}
+                  onMouseEnter={() => setDeckLibraryOpen(true)}
+                  onMouseLeave={() => activeDeck.length > 0 && setDeckLibraryOpen(false)}
+                >
+                  <div
+                    style={{
+                      position: 'absolute',
+                      left: 0,
+                      top: 0,
+                      bottom: 0,
+                      width: '16px',
+                      backgroundColor: '#E2E8F0',
+                      borderTopLeftRadius: '0.75rem',
+                      borderBottomLeftRadius: '0.75rem',
+                      cursor: 'pointer',
+                      display: activeDeck.length > 0 ? 'block' : 'none'
+                    }}
+                  />
+                  <div
+                    style={{
+                      width: '100%',
+                      minWidth: '100%',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      opacity: deckLibraryOpen ? 1 : 0,
+                      height: deckLibraryOpen ? 'auto' : 0,
+                      maxHeight: deckLibraryOpen ? 'none' : 0,
+                      transition: 'opacity 0.35s ease 0.05s, height 0.35s ease, max-height 0.35s ease',
+                      pointerEvents: deckLibraryOpen ? 'auto' : 'none',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <div className="card" style={{ height: 'fit-content' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
                       <div>
                         <h3 className="card-title" style={{ marginBottom: 0 }}>Deck Library</h3>
@@ -186,127 +274,125 @@ export default function FlashcardsTab(props) {
                         Upload a file, or paste rows from Excel/Sheets (Spanish and English columns). Then publish for your class.
                       </p>
 
-                {/* Dropzone Card */}
-                <div 
-                  className={`dropzone ${isDraggingCsv ? 'active' : ''}`}
-                  onDragOver={handleDragOver}
-                  onDragLeave={handleDragLeave}
-                  onDrop={handleDrop}
-                  onClick={() => fileInputRef.current.click()}
-                >
-                  <div className="dropzone-icon-container">
-                    <UploadIcon className="icon-svg" />
-                  </div>
-                  <span className="dropzone-text">Drop CSV file here</span>
-                  <span className="dropzone-subtext">Click to browse</span>
-                  <input 
-                    type="file"
-                    ref={fileInputRef}
-                    className="file-input-hidden"
-                    accept=".csv,.txt,text/csv"
-                    onChange={(e) => handleCsvFile(e.target.files[0])}
-                  />
-                </div>
-
-                <div
-                  style={{ marginTop: '1rem' }}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <span className="settings-label" style={{ display: 'block', marginBottom: '0.375rem' }}>Or paste CSV / spreadsheet data</span>
-                  <textarea
-                    className="text-answer-input csv-paste-input"
-                    style={{ height: '110px', resize: 'vertical', fontFamily: 'ui-monospace, monospace', fontSize: '0.8rem' }}
-                    placeholder={'hola,hello\ngracias,thank you\n\nOr paste from Excel (tab-separated):\nhola\thello'}
-                    value={csvPasteText}
-                    onChange={(e) => setCsvPasteText(e.target.value)}
-                    onPaste={handleCsvPasteArea}
-                  />
-                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      style={{ flex: 1, fontSize: '0.8rem' }}
-                      disabled={!csvPasteText.trim()}
-                      onClick={handleParseCsvPaste}
-                    >
-                      Preview pasted rows
-                    </button>
-                  </div>
-                </div>
-
-                {csvFileName && (
-                  <div style={{ marginTop: '0.875rem', fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span>📄 {csvFileName}</span>
-                    <button 
-                      type="button"
-                      className="btn" 
-                      style={{ padding: '0.15rem 0.4rem', background: 'none', border: 'none', color: 'var(--error-red)', fontSize: '0.75rem' }}
-                      onClick={clearCsvImport}
-                    >
-                      Clear
-                    </button>
-                  </div>
-                )}
-
-                {/* Import Preview Cards Table */}
-                {csvPreviewCards.length > 0 && (
-                  <div>
-                    <h4 style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--dark-navy)', marginTop: '1.25rem' }}>
-                      Detected Cards ({csvPreviewCards.length})
-                    </h4>
-                    <div className="table-container">
-                      <table className="preview-table">
-                        <thead>
-                          <tr>
-                            <th>Spanish</th>
-                            <th>English</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {csvPreviewCards.slice(0, 5).map((card, i) => (
-                            <tr key={i}>
-                              <td>{card.term}</td>
-                              <td>{card.definition}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                    {csvPreviewCards.length > 5 && (
-                      <p style={{ fontSize: '0.7rem', color: 'var(--text-light)', fontStyle: 'italic', marginBottom: '0.875rem' }}>
-                        Showing first 5 rows...
-                      </p>
-                    )}
-                    <button 
-                      className="btn btn-primary w-full"
-                      onClick={confirmImportDeck}
-                    >
-                      Import Selected Cards
-                    </button>
-                  </div>
-                )}
-
-                {/* Deck statistics widgets */}
-                {activeDeck.length > 0 && (
-                  <div style={{ marginTop: '1.25rem', borderTop: '1px solid var(--border-gray)', paddingTop: '1.25rem' }}>
-                    <h4 style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--dark-navy)', marginBottom: '0.625rem' }}>Active Deck Stats</h4>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.625rem', textAlign: 'center' }}>
-                      <div style={{ backgroundColor: 'var(--success-light)', border: '1px solid var(--success-border)', borderRadius: 'var(--radius-md)', padding: '0.5rem' }}>
-                        <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--success-text)' }}>{knownCardIds.size}</div>
-                        <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>KNOWN</div>
+                      {/* Dropzone Card */}
+                      <div 
+                        className={`dropzone ${isDraggingCsv ? 'active' : ''}`}
+                        onDragOver={handleDragOver}
+                        onDragLeave={handleDragLeave}
+                        onDrop={handleDrop}
+                        onClick={() => fileInputRef.current.click()}
+                      >
+                        <div className="dropzone-icon-container">
+                          <UploadIcon className="icon-svg" />
+                        </div>
+                        <span className="dropzone-text">Drop CSV file here</span>
+                        <span className="dropzone-subtext">Click to browse</span>
+                        <input 
+                          type="file"
+                          ref={fileInputRef}
+                          className="file-input-hidden"
+                          accept=".csv,.txt,text/csv"
+                          onChange={(e) => handleCsvFile(e.target.files[0])}
+                        />
                       </div>
-                      <div style={{ backgroundColor: 'var(--warning-light)', border: '1px solid var(--warning-border)', borderRadius: 'var(--radius-md)', padding: '0.5rem' }}>
-                        <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--warning-text)' }}>{learningCardIds.size}</div>
-                        <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>LEARNING</div>
-                      </div>
-                    </div>
-                  </div>
-                )}
 
-              </div>
+                      <div
+                        style={{ marginTop: '1rem' }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <span className="settings-label" style={{ display: 'block', marginBottom: '0.375rem' }}>Or paste CSV / spreadsheet data</span>
+                        <textarea
+                          className="text-answer-input csv-paste-input"
+                          style={{ height: '110px', resize: 'vertical', fontFamily: 'ui-monospace, monospace', fontSize: '0.8rem' }}
+                          placeholder={'hola,hello\ngracias,thank you\n\nOr paste from Excel (tab-separated):\nhola\thello'}
+                          value={csvPasteText}
+                          onChange={(e) => setCsvPasteText(e.target.value)}
+                          onPaste={handleCsvPasteArea}
+                        />
+                        <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            style={{ flex: 1, fontSize: '0.8rem' }}
+                            disabled={!csvPasteText.trim()}
+                            onClick={handleParseCsvPaste}
+                          >
+                            Preview pasted rows
+                          </button>
+                        </div>
+                      </div>
+
+                      {csvFileName && (
+                        <div style={{ marginTop: '0.875rem', fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span>📄 {csvFileName}</span>
+                          <button 
+                            type="button"
+                            className="btn" 
+                            style={{ padding: '0.15rem 0.4rem', background: 'none', border: 'none', color: 'var(--error-red)', fontSize: '0.75rem' }}
+                            onClick={clearCsvImport}
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      )}
+
+                      {csvPreviewCards.length > 0 && (
+                        <div>
+                          <h4 style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--dark-navy)', marginTop: '1.25rem' }}>
+                            Detected Cards ({csvPreviewCards.length})
+                          </h4>
+                          <div className="table-container">
+                            <table className="preview-table">
+                              <thead>
+                                <tr>
+                                  <th>Spanish</th>
+                                  <th>English</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {csvPreviewCards.slice(0, 5).map((card, i) => (
+                                  <tr key={i}>
+                                    <td>{card.term}</td>
+                                    <td>{card.definition}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          {csvPreviewCards.length > 5 && (
+                            <p style={{ fontSize: '0.7rem', color: 'var(--text-light)', fontStyle: 'italic', marginBottom: '0.875rem' }}>
+                              Showing first 5 rows...
+                            </p>
+                          )}
+                          <button 
+                            className="btn btn-primary w-full"
+                            onClick={confirmImportDeck}
+                          >
+                            Import Selected Cards
+                          </button>
+                        </div>
+                      )}
+
+                      {activeDeck.length > 0 && (
+                        <div style={{ marginTop: '1.25rem', borderTop: '1px solid var(--border-gray)', paddingTop: '1.25rem' }}>
+                          <h4 style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--dark-navy)', marginBottom: '0.625rem' }}>Active Deck Stats</h4>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.625rem', textAlign: 'center' }}>
+                            <div style={{ backgroundColor: 'var(--success-light)', border: '1px solid var(--success-border)', borderRadius: 'var(--radius-md)', padding: '0.5rem' }}>
+                              <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--success-text)' }}>{knownCardIds.size}</div>
+                              <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>KNOWN</div>
+                            </div>
+                            <div style={{ backgroundColor: 'var(--warning-light)', border: '1px solid var(--warning-border)', borderRadius: 'var(--radius-md)', padding: '0.5rem' }}>
+                              <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--warning-text)' }}>{learningCardIds.size}</div>
+                              <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>LEARNING</div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
-              )}
+              </div>
+            )}
 
             </div>
           </div>
