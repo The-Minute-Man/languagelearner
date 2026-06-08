@@ -165,9 +165,6 @@ export default function LearnTab(props) {
                     <span className="custom-badge learn-status-badge">
                       Current: {currentCardStatus}
                     </span>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-light)', fontWeight: 600 }}>
-                      {session ? 'Progress auto-saves' : `Remaining: ${learnState.questionQueue.length}`}
-                    </span>
                   </div>
 
                   <div className="progress-container">

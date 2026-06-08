@@ -54,9 +54,6 @@ export default function FlashcardsTab(props) {
                       <span className="custom-badge">
                         Card {flashcardIndex + 1} of {activeDeck.length}
                       </span>
-                      <span className="custom-badge" style={{ fontSize: '0.75rem', fontWeight: 600 }}>
-                        {session ? 'Progress auto-saves' : 'Sign in to save progress'}
-                      </span>
                       <div className="d-flex gap-2" style={{ flexWrap: 'wrap', justifyContent: 'center' }}>
                         {knownCardIds.has(currentFlashcard.id) && (
                           <span className="custom-badge custom-badge-green">Mastered</span>

@@ -169,8 +169,6 @@ export default function StoryTab(props) {
                     Reset Progress
                   </button>
                   <span className="custom-badge" style={{ display: 'inline-flex', gap: '0.5rem', alignItems: 'center' }}>
-                    <span>{session ? 'Progress auto-saves' : 'Sign in to save progress'}</span>
-                    <span>·</span>
                     <span>
                       {getStoryProgress().pct}% ({getStoryProgress().completed}/{getStoryProgress().total})
                     </span>
