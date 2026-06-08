@@ -1908,10 +1908,43 @@ export default function App() {
     }
   };
 
+  const handleLearnEnter = () => {
+    if (!learnState.currentQuestion) return;
+
+    if (learnState.isAnswerSubmitted) {
+      dispatchLearn({ type: 'NEXT_QUESTION' });
+      return;
+    }
+
+    if (learnState.currentQuestion.type === 'type') {
+      handleTypeSubmit();
+      return;
+    }
+
+    if (learnState.currentQuestion.type === 'mc' && learnState.selectedOption != null) {
+      handleMcqSelect(learnState.selectedOption);
+      return;
+    }
+
+    if (learnState.currentQuestion.type === 'tf' && typeof learnState.selectedOption === 'boolean') {
+      handleTfSelect(learnState.selectedOption);
+      return;
+    }
+  };
+
   useEffect(() => {
     const handleGlobalKeys = (e) => {
-      const activeElement = document.activeElement?.tagName;
-      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(activeElement)) return;
+      const activeElement = document.activeElement;
+      const activeTag = activeElement?.tagName;
+
+      if (activeTab === 'learn' && e.key === 'Enter') {
+        e.preventDefault();
+        handleLearnEnter();
+        return;
+      }
+
+      const isFormInput = ['INPUT', 'TEXTAREA', 'SELECT'].includes(activeTag);
+      if (isFormInput) return;
 
       if (activeTab === 'flashcards') {
         if (e.key === 'ArrowRight') {
@@ -1935,25 +1968,11 @@ export default function App() {
           setIsCardFlipped((prev) => !prev);
         }
       }
-
-      if (activeTab === 'learn') {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          // If answer already checked, go to next; otherwise submit current answer when applicable
-          if (learnState.isAnswerSubmitted) {
-            dispatchLearn({ type: 'NEXT_QUESTION' });
-          } else {
-            if (learnState.currentQuestion?.type === 'type') {
-              handleTypeSubmit();
-            }
-          }
-        }
-      }
     };
 
     window.addEventListener('keydown', handleGlobalKeys);
     return () => window.removeEventListener('keydown', handleGlobalKeys);
-  }, [activeTab, learnState.isAnswerSubmitted, handleTagKnown, handleTagLearning, setIsCardFlipped, handleTypeSubmit, learnState.currentQuestion]);
+  }, [activeTab, learnState.isAnswerSubmitted, learnState.currentQuestion, learnState.selectedOption, handleTagKnown, handleTagLearning, setIsCardFlipped, handleTypeSubmit, handleMcqSelect, handleTfSelect]);
 
   const formatTime = (ms) => {
     if (!ms || ms < 0) return "0:00";
@@ -2841,7 +2860,7 @@ export default function App() {
             ========================================== */}
         {activeTab === 'learn' && (
           <LearnTab
-            activeDeck={activeDeck} answer={answer} cards={cards} correct={correct} dispatchLearn={dispatchLearn} formatTime={formatTime} handleMatchingCardClick={handleMatchingCardClick} handleMcqSelect={handleMcqSelect} handleTfSelect={handleTfSelect} handleTypeSubmit={handleTypeSubmit} isCorrect={isCorrect} isInClass={isInClass} isMatched={isMatched} isMismatched={isMismatched} isSelected={isSelected} isTarget={isTarget} learnState={learnState} matched={matched} matchingBoard={matchingBoard} matchingCardKey={matchingCardKey} mcOptions={mcOptions} options={options} payload={payload} prompt={prompt} selected={selected} session={session} title={title} type={type} knownCardIds={knownCardIds} learningCardIds={learningCardIds} familiarCardIds={familiarCardIds}
+            activeDeck={activeDeck} answer={answer} cards={cards} correct={correct} dispatchLearn={dispatchLearn} formatTime={formatTime} handleMatchingCardClick={handleMatchingCardClick} handleMcqSelect={handleMcqSelect} handleTfSelect={handleTfSelect} handleTypeSubmit={handleTypeSubmit} handleLearnEnter={handleLearnEnter} isCorrect={isCorrect} isInClass={isInClass} isMatched={isMatched} isMismatched={isMismatched} isSelected={isSelected} isTarget={isTarget} learnState={learnState} matched={matched} matchingBoard={matchingBoard} matchingCardKey={matchingCardKey} mcOptions={mcOptions} options={options} payload={payload} prompt={prompt} selected={selected} session={session} title={title} type={type} knownCardIds={knownCardIds} learningCardIds={learningCardIds} familiarCardIds={familiarCardIds} clearDeckProgress={clearDeckProgress}
           />
         )}
 

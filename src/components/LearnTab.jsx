@@ -3,14 +3,21 @@ import { FolderIcon, UploadIcon, SettingsIcon, StarIcon, CheckIcon, XIcon, Arrow
 
 export default function LearnTab(props) {
   const {
-    activeDeck, answer, cards, correct, dispatchLearn, formatTime, handleMatchingCardClick, handleMcqSelect, handleTfSelect, handleTypeSubmit, isCorrect, isInClass, isMatched, isMismatched, isSelected, isTarget, key, learnState, matched, matchingBoard, matchingCardKey, mcOptions, options, payload, prompt, selected, session, title, type,
-    knownCardIds, learningCardIds, familiarCardIds,
+    activeDeck, answer, cards, correct, dispatchLearn, formatTime, handleMatchingCardClick, handleMcqSelect, handleTfSelect, handleTypeSubmit, handleLearnEnter, isCorrect, isInClass, isMatched, isMismatched, isSelected, isTarget, key, learnState, matched, matchingBoard, matchingCardKey, mcOptions, options, payload, prompt, selected, session, title, type,
+    knownCardIds, learningCardIds, familiarCardIds, clearDeckProgress,
   } = props;
 
   const masteredCount = knownCardIds?.size || 0;
   const learningCount = learningCardIds?.size || 0;
   const familiarCount = familiarCardIds?.size || 0;
   const newCount = Math.max(0, activeDeck.length - masteredCount - learningCount - familiarCount);
+  const totalDeckCount = activeDeck.length || 1;
+  const statusSegments = [
+    { label: 'New', count: newCount, color: '#60A5FA' },
+    { label: 'Familiar', count: familiarCount, color: '#F59E0B' },
+    { label: 'Learning', count: learningCount, color: '#F97316' },
+    { label: 'Mastered', count: masteredCount, color: '#10B981' }
+  ];
   const currentCardStatus = learnState.currentQuestion
     ? knownCardIds.has(learnState.currentQuestion.card.id)
       ? 'Mastered'
@@ -212,12 +219,6 @@ export default function LearnTab(props) {
                           disabled={learnState.isAnswerSubmitted}
                           value={learnState.userAnswer}
                           onChange={(e) => dispatchLearn({ type: 'SET_ANSWER', payload: e.target.value })}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              handleTypeSubmit();
-                            }
-                          }}
                           autoFocus={learnState.currentQuestion.type === 'type'}
                         />
                         {!learnState.isAnswerSubmitted && (
@@ -349,6 +350,45 @@ export default function LearnTab(props) {
                       </button>
                     </div>
                   )}
+                </div>
+
+                <div style={{ marginTop: '1.5rem' }}>
+                  <div style={{ display: 'flex', height: '1rem', borderRadius: '9999px', overflow: 'hidden', backgroundColor: 'var(--border-gray)' }}>
+                    {statusSegments.map((segment) => (
+                      <div
+                        key={segment.label}
+                        style={{
+                          width: `${(segment.count / totalDeckCount) * 100}%`,
+                          backgroundColor: segment.color,
+                          transition: 'width 0.3s ease'
+                        }}
+                      />
+                    ))}
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: '0.75rem', marginTop: '0.75rem' }}>
+                    {statusSegments.map((segment) => (
+                      <div key={segment.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem', borderRadius: '0.75rem', backgroundColor: '#FFFFFF', border: '1px solid #E5E7EB' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          <span style={{ width: '0.75rem', height: '0.75rem', borderRadius: '9999px', backgroundColor: segment.color, display: 'inline-block' }} />
+                          {segment.label}
+                        </span>
+                        <strong style={{ fontSize: '0.9rem', color: 'var(--text-main)' }}>{segment.count}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
+                  <button
+                    className="btn btn-secondary"
+                    onClick={clearDeckProgress}
+                    type="button"
+                  >
+                    Reset Progress
+                  </button>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                    Press Enter to {learnState.isAnswerSubmitted ? 'continue' : 'check answer'}.
+                  </div>
                 </div>
 
               </div>

@@ -82,11 +82,11 @@ export default function FlashcardsTab(props) {
 
                   {/* Tagging Operations */}
                   <div>
-                    <div className="button-group" style={{ borderTop: '1px solid var(--border-gray)', paddingTop: '1.15rem' }}>
-                      <button className="btn btn-secondary" onClick={handleTagLearning}>
+                    <div className="button-group" style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', borderTop: '1px solid var(--border-gray)', paddingTop: '1.15rem' }}>
+                      <button className="btn btn-error" style={{ flex: 1 }} onClick={handleTagLearning}>
                         Still Learning
                       </button>
-                      <button className="btn btn-success" onClick={handleTagKnown}>
+                      <button className="btn btn-success" style={{ flex: 1 }} onClick={handleTagKnown}>
                         Known
                       </button>
                     </div>
